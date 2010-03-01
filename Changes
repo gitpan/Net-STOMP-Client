@@ -1,0 +1,6 @@
+Revision history for Net-STOMP-Client
+
+0.8	Mon Mar  1 2010
+	This module has been initially released on CPAN as Net::STOMP
+	but has later been renamed to Net::STOMP::Client to avoid a
+	naming conflict.

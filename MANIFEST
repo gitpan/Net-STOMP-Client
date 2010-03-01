@@ -1,0 +1,13 @@
+Changes
+lib/Net/STOMP/Client.pm
+lib/Net/STOMP/Client/Debug.pm
+lib/Net/STOMP/Client/Error.pm
+lib/Net/STOMP/Client/Frame.pm
+lib/Net/STOMP/Client/IO.pm
+lib/Net/STOMP/Client/OO.pm
+Makefile.PL
+MANIFEST
+META.yml			Module meta-data (added by MakeMaker)
+README
+t/00-load.t
+t/pod.t
