@@ -13,7 +13,7 @@
 package Net::STOMP::Client;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.53 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.57 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -173,6 +173,8 @@ sub new : method {
     $self = $class->SUPER::new(%data);
     %sockopts = %{ $self->sockopts() } if $self->sockopts();
     $sockopts{SSL_use_cert} = 1 if $sockopts{SSL_cert_file} or $sockopts{SSL_key_file};
+    $sockopts{Timeout} = $self->timeout()
+	if $self->timeout() and not exists($sockopts{Timeout});
     if ($self->uri()) {
 	if ($self->host()) {
 	    Net::STOMP::Client::Error::report("%s: unexpected server host: %s",
@@ -187,7 +189,7 @@ sub new : method {
 	@servers = _handle_uri($self->uri());
 	return() unless @servers;
 	# use by default a shorter (but hard-coded) timeout in case we use failover...
-	$sockopts{Timeout} = 1 if @servers > 1 and not $sockopts{Timeout};
+	$sockopts{Timeout} = 1 if @servers > 1 and not exists($sockopts{Timeout});
     } else {
 	unless ($self->host()) {
 	    Net::STOMP::Client::Error::report("%s: missing server host", $me);
@@ -356,7 +358,8 @@ sub receipts : method {
 sub DESTROY {
     my($self) = @_;
 
-    $self->disconnect() if $self->session();
+    # try to disconnect gracefully if possible
+    $self->disconnect() if $self->session() and $self->_io();
 }
 
 #+++############################################################################
@@ -506,51 +509,29 @@ sub dispatch_frame : method {
 #---############################################################################
 
 #
-# check that there is an ongoing session
+# check the method invocation for the high-level API (except connect)
 #
 
-sub _check_session : method {
-    my($self) = @_;
+sub _check_invocation : method {
+    my($self, $argc) = @_;
     my($caller);
 
     $caller = (caller(1))[3];
     $caller =~ s/^(.+)::/$1->/;
+    # debug
+    Net::STOMP::Client::Debug::report(Net::STOMP::Client::Debug::API, "%s()", $caller);
+    # must be called with a hash
+    unless ($argc % 2) {
+	Net::STOMP::Client::Error::report("%s(): wrong invocation", $caller);
+	return();
+    }
+    # must be called after connection
     unless ($self->session()) {
 	Net::STOMP::Client::Error::report("%s(): not connected", $caller);
 	return();
     }
+    # so far so good
     return($self);
-}
-
-#
-# check that there is _not_ an ongoing session
-#
-
-sub _check_not_session : method {
-    my($self) = @_;
-    my($caller);
-
-    $caller = (caller(1))[3];
-    $caller =~ s/^(.+)::/$1->/;
-    if ($self->session()) {
-	Net::STOMP::Client::Error::report("%s(): already connected with session: %s",
-				  $caller, $self->session());
-	return();
-    }
-    return($self);
-}
-
-#
-# trace the high-level method calls
-#
-
-sub _trace : method {
-    my($self) = @_;
-    my($caller);
-
-    $caller = (caller(1))[3];
-    $caller =~ s/^(.+)::/$1->/;
-    Net::STOMP::Client::Debug::report(Net::STOMP::Client::Debug::API, "%s()", $caller);
 }
 
 #
@@ -559,10 +540,23 @@ sub _trace : method {
 
 sub connect : method {
     my($self, %option) = @_;
-    my($frame, $session);
+    my($me, $frame, $session);
 
-    $self->_trace() if $Net::STOMP::Client::Debug::Flags;
-    $self->_check_not_session() or return();
+    $me = "Net::STOMP::Client->connect()";
+    # debug
+    Net::STOMP::Client::Debug::report(Net::STOMP::Client::Debug::API, "%s()", $me);
+    # must be called with a hash
+    unless (scalar(@_) % 2) {
+	Net::STOMP::Client::Error::report("%s(): wrong invocation", $me);
+	return();
+    }
+    # must be called before connection
+    if ($self->session()) {
+	Net::STOMP::Client::Error::report("%s(): already connected with session: %s",
+					  $me, $self->session());
+	return();
+    }
+    # so far so good
     $option{login} = "" unless defined($option{login});
     $option{passcode} = "" unless defined($option{passcode});
     $frame = Net::STOMP::Client::Frame->new(
@@ -588,8 +582,7 @@ sub disconnect : method {
     my($self) = @_;
     my($frame);
 
-    $self->_trace() if $Net::STOMP::Client::Debug::Flags;
-    $self->_check_session() or return();
+    $self->_check_invocation(scalar(@_)) or return();
     # send a DISCONNECT frame
     $frame = Net::STOMP::Client::Frame->new(command => "DISCONNECT");
     $self->send_frame($frame) or return();
@@ -608,8 +601,7 @@ sub subscribe : method {
     my($self, %option) = @_;
     my($frame);
 
-    $self->_trace() if $Net::STOMP::Client::Debug::Flags;
-    $self->_check_session() or return();
+    $self->_check_invocation(scalar(@_)) or return();
     # send a SUBSCRIBE frame
     $frame = Net::STOMP::Client::Frame->new(
         command => "SUBSCRIBE",
@@ -627,9 +619,8 @@ sub unsubscribe : method {
     my($self, %option) = @_;
     my($frame);
 
-    $self->_trace() if $Net::STOMP::Client::Debug::Flags;
-    $self->_check_session() or return();
-    # send a UNSUBSCRIBE frame
+    $self->_check_invocation(scalar(@_)) or return();
+    # send an UNSUBSCRIBE frame
     $frame = Net::STOMP::Client::Frame->new(
         command => "UNSUBSCRIBE",
 	headers => \%option,
@@ -646,9 +637,8 @@ sub send : method {
     my($self, %option) = @_;
     my($frame, $body);
 
-    $self->_trace() if $Net::STOMP::Client::Debug::Flags;
-    $self->_check_session() or return();
-    # the body can be given via %option, we move it out
+    $self->_check_invocation(scalar(@_)) or return();
+    # the body is given via %option, we move it out
     $body = $option{body};
     delete($option{body});
     # send a SEND frame
@@ -669,14 +659,13 @@ sub ack : method {
     my($self, %option) = @_;
     my($frame);
 
-    $self->_trace() if $Net::STOMP::Client::Debug::Flags;
-    $self->_check_session() or return();
+    $self->_check_invocation(scalar(@_)) or return();
     # the message id can be given via a frame object in %option
     if ($option{frame}) {
 	$option{"message-id"} = $option{frame}->header("message-id");
 	delete($option{frame});
     }
-    # send a ACK frame
+    # send an ACK frame
     $frame = Net::STOMP::Client::Frame->new(
         command => "ACK",
 	headers => \%option,
@@ -693,8 +682,7 @@ sub begin : method {
     my($self, %option) = @_;
     my($frame);
 
-    $self->_trace() if $Net::STOMP::Client::Debug::Flags;
-    $self->_check_session() or return();
+    $self->_check_invocation(scalar(@_)) or return();
     # send a BEGIN frame
     $frame = Net::STOMP::Client::Frame->new(
         command => "BEGIN",
@@ -712,8 +700,7 @@ sub commit : method {
     my($self, %option) = @_;
     my($frame);
 
-    $self->_trace() if $Net::STOMP::Client::Debug::Flags;
-    $self->_check_session() or return();
+    $self->_check_invocation(scalar(@_)) or return();
     # send a COMMIT frame
     $frame = Net::STOMP::Client::Frame->new(
         command => "COMMIT",
@@ -731,9 +718,8 @@ sub abort : method {
     my($self, %option) = @_;
     my($frame);
 
-    $self->_trace() if $Net::STOMP::Client::Debug::Flags;
-    $self->_check_session() or return();
-    # send a ABORT frame
+    $self->_check_invocation(scalar(@_)) or return();
+    # send an ABORT frame
     $frame = Net::STOMP::Client::Frame->new(
         command => "ABORT",
 	headers => \%option,
@@ -799,8 +785,8 @@ Net::STOMP::Client - STOMP object oriented client module
 
 This module provides an object oriented client interface to interact
 with servers supporting STOMP (Streaming Text Orientated Messaging
-Protocol). It supports the major features of messaging brokers: SSL,
-asynchronous I/O, receipts and transactions.
+Protocol). It supports the major features of modern messaging brokers:
+SSL, asynchronous I/O, receipts and transactions.
 
 =head1 CONSTRUCTOR
 
@@ -1119,7 +1105,8 @@ This module implements the version 1.0 of the protocol (see
 L<http://stomp.codehaus.org/Protocol>) as well as well known
 extensions for JMS, AMQP, ActiveMQ and RabbitMQ.
 
-It has been tested against both ActiveMQ and RabbitMQ brokers.
+It has been successfully tested against both ActiveMQ and RabbitMQ
+brokers.
 
 =head1 SEE ALSO
 

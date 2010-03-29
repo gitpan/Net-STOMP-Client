@@ -13,7 +13,7 @@
 package Net::STOMP::Client::Frame;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.14 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.17 $ =~ /(\d+)\.(\d+)/);
 
 #
 # Object Oriented definition
@@ -36,10 +36,12 @@ use Net::STOMP::Client::Error;
 
 our(
     $CheckLevel,         # level of checking performed by the check() method
+    $HeaderRegexp,	 # regular expression matching a header name
     %CommandHeader,	 # hash of expected commands and headers
 );
 
 $CheckLevel = 2;
+$HeaderRegexp = q{[\w\-\.]+};
 
 #+++############################################################################
 #                                                                              #
@@ -94,7 +96,7 @@ sub decode ($) {
     $headers = {};
     if ($index > $length) {
 	foreach $line (split(/\n/, substr($string, $length + 1, $index - $length - 1))) {
-	    unless ($line =~ /^((?:[a-z]+[\.\-])*[a-z]+)\s*:\s*(.*?)$/i) {
+	    unless ($line =~ /^($HeaderRegexp)\s*:\s*(.*?)\s*$/o) {
 		Net::STOMP::Client::Error::report("%s: invalid header: %s", $me, $line);
 		return();
 	    }
@@ -307,7 +309,7 @@ sub check : method {
 	    return();
 	}
 	foreach $key (keys(%$headers)) {
-	    unless ($key =~ /^([a-z]+[\.\-])*[a-z]+$/i) {
+	    unless ($key =~ /^($HeaderRegexp)$/o) {
 		Net::STOMP::Client::Error::report("%s: invalid header key: %s", $me, $key);
 		return();
 	    }
@@ -443,9 +445,9 @@ If you do supply a numerical "content-length" header, it will be used
 as is. Warning: this may give unexpected results if the supplied value
 does not match the body length. Use only with caution!
 
-Finally, if you supply an empty "content-length" header, it will not
-be sent, even if the frame has a body. This can be used to mark a
-message as being a TextMessage for ActiveMQ.
+Finally, if you supply an empty string as the "content-length" header,
+it will not be sent, even if the frame has a body. This can be used to
+mark a message as being a TextMessage for ActiveMQ.
 
 =head1 FRAME CHECKING
 
@@ -520,7 +522,8 @@ all header keys must be known/expected
 
 =back
 
-Violations of these checks trigger errors in the check() method.
+A violation of any of these checks trigger an error in the check()
+method.
 
 =head1 AUTHOR
 
