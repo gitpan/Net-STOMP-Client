@@ -1,5 +1,14 @@
 Revision history for Net-STOMP-Client
 
+0.9.1	Tue Jun  1 2010
+	* Now performs a better socket cleanup when disconnecting.
+	* Net::STOMP::Client->wait_for_frames() now handles more precisely
+	  the timeout option: if integer, it should wait for at least this
+	  number of seconds and should not block for more than this number
+	  of seconds plus one.
+	* All STOMP methods now support a timeout option that specifies the
+	  maximum time that can be used to send the frame.
+
 0.9	Mon Mar 29 2010
 	* Net::STOMP::Client::Frame is now less strict about header names.
 	* Net::STOMP::Client->new() now uses its timeout option to set the

@@ -13,7 +13,7 @@
 package Net::STOMP::Client::IO;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.10 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.13 $ =~ /(\d+)\.(\d+)/);
 
 #
 # Object Oriented definition
@@ -53,6 +53,29 @@ sub new : method {
 }
 
 #
+# destructor
+#
+
+sub DESTROY {
+    my($self) = @_;
+    my($socket, $ignored);
+
+    $socket = $self->_socket();
+    if ($socket) {
+	if (ref($socket) eq "IO::Socket::INET") {
+	    # this is a plain INET socket: we call shutdown() without checking
+	    # if it fails as there is not much that can be done about it...
+	    $ignored = shutdown($socket, 2);
+	} else {
+	    # this must be an IO::Socket::SSL object so it is better not
+	    # to call shutdown(), see IO::Socket::SSL's man page
+	}
+	# the following will cleanly auto-close the socket
+	$self->_socket(undef);
+    }
+}
+
+#
 # try to send the given data
 #
 # note: this can still hang if the server starts to read something but then
@@ -86,12 +109,8 @@ sub send_data : method {
 #
 # note: we suck all the available data since we do not know when to stop as we
 # have no a priori knowledge on the size of the next frame; this should not be
-# a problem in practice; otherwise, we could add an optional max-length parameter
-# to avoid reading to much in memory...
+# a problem in practice
 #
-
-# FIXME: add a parameter controlling the maximum buffer size (and therefore
-# indirectly the maximum frame size...)
 
 sub receive_data : method {
     my($self, $timeout) = @_;

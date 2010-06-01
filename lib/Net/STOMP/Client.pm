@@ -13,7 +13,7 @@
 package Net::STOMP::Client;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.57 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.62 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -48,8 +48,6 @@ our(
 # low-level API                                                                #
 #                                                                              #
 #---############################################################################
-
-# FIXME: check and use $self->timeout() where this makes sense...
 
 #
 # try to connect to the server (socket level only)
@@ -241,6 +239,9 @@ sub send_frame : method {
     my($self, $frame, $timeout) = @_;
     my($done, $receipt);
 
+    # check that the object is usable
+    Net::STOMP::Client::Error::report("lost connection")
+	unless $self->_io();
     # always check the sent frame
     $frame->check() or return();
     # keep track of receipts
@@ -261,6 +262,9 @@ sub receive_frame : method {
     my($self, $timeout) = @_;
     my($buffer, $done, $frame);
 
+    # check that the object is usable
+    Net::STOMP::Client::Error::report("lost connection")
+	unless $self->_io();
     # first try to use the current buffer
     $buffer = $self->_io()->_buffer();
     $frame = Net::STOMP::Client::Frame::decode($buffer);
@@ -290,13 +294,16 @@ sub receive_frame : method {
 
 sub wait_for_frames : method {
     my($self, %option) = @_;
-    my($timeout, $callback, $limit, $frame, $result);
+    my($callback, $timeout, $limit, $timeleft, $frame, $result, $now);
 
     $callback = $option{callback};
     $timeout = $option{timeout};
-    $limit = time() + $timeout if defined($timeout);
+    if (defined($timeout)) {
+	$limit = time() + $timeout;
+	$timeleft = $timeout;
+    }
     while (1) {
-	$frame = $self->receive_frame($timeout);
+	$frame = $self->receive_frame($timeleft);
 	return() unless defined($frame);
 	if ($frame) {
 	    # we always call first the per-command callback
@@ -311,7 +318,13 @@ sub wait_for_frames : method {
 		return($frame);
 	    }
 	}
-	return(0) if defined($timeout) and time() > $limit;
+	# we try to check that at least $timeout seconds have passed
+	# note: this is guaranteed to work only if $timeout is an integer...
+	if (defined($timeout)) {
+	    $now = time();
+	    return(0) if $now > $limit;
+	    $timeleft = $limit - $now + 1;
+	}
     }
     # not reached...
     die("ooops!");
@@ -443,7 +456,6 @@ $Callback{CONNECTED} = \&_default_connected_callback;
 sub _default_error_callback ($$) {
     my($self, $frame) = @_;
 
-    # FIXME: what shall we do with the message body?
     _unexpected_frame($frame, $frame->header("message"));
     return();
 }
@@ -540,9 +552,9 @@ sub _check_invocation : method {
 
 sub connect : method {
     my($self, %option) = @_;
-    my($me, $frame, $session);
+    my($me, $frame, $timeout, $session);
 
-    $me = "Net::STOMP::Client->connect()";
+    $me = "Net::STOMP::Client->connect";
     # debug
     Net::STOMP::Client::Debug::report(Net::STOMP::Client::Debug::API, "%s()", $me);
     # must be called with a hash
@@ -557,16 +569,17 @@ sub connect : method {
 	return();
     }
     # so far so good
+    $timeout = delete($option{timeout});
     $option{login} = "" unless defined($option{login});
     $option{passcode} = "" unless defined($option{passcode});
     $frame = Net::STOMP::Client::Frame->new(
-        command => "CONNECT",
+	command => "CONNECT",
 	headers => \%option,
     );
-    $self->send_frame($frame) or return();
+    $self->send_frame($frame, $timeout) or return();
     $session = $self->wait_for_frames(
-        callback => sub { return($self->session()) },
-	timeout  => 10,
+	callback => sub { return($self->session()) },
+	timeout  => $self->timeout() || 10,
     );
     return($self) if $session;
     Net::STOMP::Client::Error::report("Net::STOMP::Client->connect(): %s",
@@ -575,21 +588,24 @@ sub connect : method {
 }
 
 #
-# disconnect from server (no options/headers supported)
+# disconnect from server
 #
 
 sub disconnect : method {
-    my($self) = @_;
-    my($frame);
+    my($self, %option) = @_;
+    my($frame, $timeout);
 
     $self->_check_invocation(scalar(@_)) or return();
+    $timeout = delete($option{timeout});
     # send a DISCONNECT frame
-    $frame = Net::STOMP::Client::Frame->new(command => "DISCONNECT");
-    $self->send_frame($frame) or return();
+    $frame = Net::STOMP::Client::Frame->new(
+	command => "DISCONNECT",
+	headers => \%option,
+    );
+    $self->send_frame($frame, $timeout) or return();
     # additional bookkeeping
     $self->session("");
-    # FIXME: close the socket and mark the object as not usable anymore
-    # FIXME: warning if the buffer is not empty, we may have unprocessed frames...
+    $self->_io(undef);
     return($self);
 }
 
@@ -599,15 +615,16 @@ sub disconnect : method {
 
 sub subscribe : method {
     my($self, %option) = @_;
-    my($frame);
+    my($frame, $timeout);
 
     $self->_check_invocation(scalar(@_)) or return();
+    $timeout = delete($option{timeout});
     # send a SUBSCRIBE frame
     $frame = Net::STOMP::Client::Frame->new(
-        command => "SUBSCRIBE",
+	command => "SUBSCRIBE",
 	headers => \%option,
     );
-    $self->send_frame($frame) or return();
+    $self->send_frame($frame, $timeout) or return();
     return($self);
 }
 
@@ -617,15 +634,16 @@ sub subscribe : method {
 
 sub unsubscribe : method {
     my($self, %option) = @_;
-    my($frame);
+    my($frame, $timeout);
 
     $self->_check_invocation(scalar(@_)) or return();
+    $timeout = delete($option{timeout});
     # send an UNSUBSCRIBE frame
     $frame = Net::STOMP::Client::Frame->new(
-        command => "UNSUBSCRIBE",
+	command => "UNSUBSCRIBE",
 	headers => \%option,
     );
-    $self->send_frame($frame) or return();
+    $self->send_frame($frame, $timeout) or return();
     return($self);
 }
 
@@ -635,19 +653,18 @@ sub unsubscribe : method {
 
 sub send : method {
     my($self, %option) = @_;
-    my($frame, $body);
+    my($frame, $timeout, $body);
 
     $self->_check_invocation(scalar(@_)) or return();
-    # the body is given via %option, we move it out
-    $body = $option{body};
-    delete($option{body});
+    $timeout = delete($option{timeout});
+    $body = delete($option{body});
     # send a SEND frame
     $frame = Net::STOMP::Client::Frame->new(
-        command => "SEND",
+	command => "SEND",
 	headers => \%option,
     );
     $frame->body($body) if defined($body);
-    $self->send_frame($frame) or return();
+    $self->send_frame($frame, $timeout) or return();
     return($self);
 }
 
@@ -657,9 +674,10 @@ sub send : method {
 
 sub ack : method {
     my($self, %option) = @_;
-    my($frame);
+    my($frame, $timeout);
 
     $self->_check_invocation(scalar(@_)) or return();
+    $timeout = delete($option{timeout});
     # the message id can be given via a frame object in %option
     if ($option{frame}) {
 	$option{"message-id"} = $option{frame}->header("message-id");
@@ -667,10 +685,10 @@ sub ack : method {
     }
     # send an ACK frame
     $frame = Net::STOMP::Client::Frame->new(
-        command => "ACK",
+	command => "ACK",
 	headers => \%option,
     );
-    $self->send_frame($frame) or return();
+    $self->send_frame($frame, $timeout) or return();
     return($self);
 }
 
@@ -680,15 +698,16 @@ sub ack : method {
 
 sub begin : method {
     my($self, %option) = @_;
-    my($frame);
+    my($frame, $timeout);
 
     $self->_check_invocation(scalar(@_)) or return();
+    $timeout = delete($option{timeout});
     # send a BEGIN frame
     $frame = Net::STOMP::Client::Frame->new(
-        command => "BEGIN",
+	command => "BEGIN",
 	headers => \%option,
     );
-    $self->send_frame($frame) or return();
+    $self->send_frame($frame, $timeout) or return();
     return($self);
 }
 
@@ -698,15 +717,16 @@ sub begin : method {
 
 sub commit : method {
     my($self, %option) = @_;
-    my($frame);
+    my($frame, $timeout);
 
     $self->_check_invocation(scalar(@_)) or return();
+    $timeout = delete($option{timeout});
     # send a COMMIT frame
     $frame = Net::STOMP::Client::Frame->new(
-        command => "COMMIT",
+	command => "COMMIT",
 	headers => \%option,
     );
-    $self->send_frame($frame) or return();
+    $self->send_frame($frame, $timeout) or return();
     return($self);
 }
 
@@ -716,15 +736,16 @@ sub commit : method {
 
 sub abort : method {
     my($self, %option) = @_;
-    my($frame);
+    my($frame, $timeout);
 
     $self->_check_invocation(scalar(@_)) or return();
+    $timeout = delete($option{timeout});
     # send an ABORT frame
     $frame = Net::STOMP::Client::Frame->new(
-        command => "ABORT",
+	command => "ABORT",
 	headers => \%option,
     );
-    $self->send_frame($frame) or return();
+    $self->send_frame($frame, $timeout) or return();
     return($self);
 }
 
@@ -813,7 +834,8 @@ the port number of the STOMP service
 
 =item C<timeout>
 
-a timeout value to be used in some I/O operation (experimental)
+the maximum time (in seconds) allowed to connect to broker (TCP level),
+also the maximum time to wait for a CONNECTED frame from broker (STOMP level)
 
 =item C<sockopts>
 
@@ -935,6 +957,9 @@ C<body>: holds the body of the message to be sent
 C<frame>: holds the frame object to acknowledge (its message-id will be used)
 
 =back
+
+Finally, all methods support a C<timeout> option that will be given to
+the send_frame() method called internally to send the crafted frame.
 
 =head1 OTHER METHODS
 

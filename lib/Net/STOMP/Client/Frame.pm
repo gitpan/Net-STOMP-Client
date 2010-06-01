@@ -13,7 +13,7 @@
 package Net::STOMP::Client::Frame;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.17 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.18 $ =~ /(\d+)\.(\d+)/);
 
 #
 # Object Oriented definition
@@ -447,7 +447,14 @@ does not match the body length. Use only with caution!
 
 Finally, if you supply an empty string as the "content-length" header,
 it will not be sent, even if the frame has a body. This can be used to
-mark a message as being a TextMessage for ActiveMQ.
+mark a message as being a TextMessage for ActiveMQ. Here is an example
+of this:
+
+  $stomp->send(
+      "destination"    => "/queue/test",
+      "body"           => "hello world!",
+      "content-length" => "",
+  );
 
 =head1 FRAME CHECKING
 
