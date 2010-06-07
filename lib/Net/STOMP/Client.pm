@@ -13,7 +13,7 @@
 package Net::STOMP::Client;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.62 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.63 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -48,6 +48,42 @@ our(
 # low-level API                                                                #
 #                                                                              #
 #---############################################################################
+
+#
+# return which timeout to use for the given operation
+#
+
+sub _timeout : method {
+    my($self, $operation) = @_;
+    my($timeout);
+
+    $timeout = $self->timeout();
+    if ($timeout) {
+	if (ref($timeout) eq "HASH") {
+	    # hash timeout specified -> use it as is
+	} else {
+	    # scalar timeout specified -> backward compatibility
+	    $timeout = {
+		connect   => $timeout,
+		connected => $timeout,
+		send      => undef,
+	    };
+	}
+    } else {
+	# no timeout specified -> use hard-coded defaults
+	$timeout = {
+	    connect   => undef,
+	    connected => 10,
+	    send      => undef,
+	};
+    }
+    unless ($operation =~ /^(connect|connected|send)$/) {
+	Net::STOMP::Client::Error::repor("%s: unexpected timeout operation: %s",
+					 "Net::STOMP::Client", $operation);
+	return();
+    }
+    return($timeout->{$operation});
+}
 
 #
 # try to connect to the server (socket level only)
@@ -165,14 +201,16 @@ sub _handle_uri ($) {
 
 sub new : method {
     my($class, %data) = @_;
-    my($me, $self, %sockopts, @uris, $uri, @servers, $server, $socket, $io);
+    my($me, $self, %sockopts, $timeout, @uris, $uri, @servers, $server, $socket, $io);
 
     $me = "Net::STOMP::Client->new()";
     $self = $class->SUPER::new(%data);
     %sockopts = %{ $self->sockopts() } if $self->sockopts();
     $sockopts{SSL_use_cert} = 1 if $sockopts{SSL_cert_file} or $sockopts{SSL_key_file};
-    $sockopts{Timeout} = $self->timeout()
-	if $self->timeout() and not exists($sockopts{Timeout});
+    unless (exists($sockopts{Timeout})) {
+	$timeout = $self->_timeout("connect");
+	$sockopts{Timeout} = $timeout if $timeout;
+    }
     if ($self->uri()) {
 	if ($self->host()) {
 	    Net::STOMP::Client::Error::report("%s: unexpected server host: %s",
@@ -186,8 +224,11 @@ sub new : method {
 	}
 	@servers = _handle_uri($self->uri());
 	return() unless @servers;
-	# use by default a shorter (but hard-coded) timeout in case we use failover...
-	$sockopts{Timeout} = 1 if @servers > 1 and not exists($sockopts{Timeout});
+	# use by default a shorter timeout in case we use failover...
+	if (@servers > 1 and not $sockopts{Timeout}) {
+	    # it makes no sense to block with failover!
+	    $sockopts{Timeout} = 3;
+	}
     } else {
 	unless ($self->host()) {
 	    Net::STOMP::Client::Error::report("%s: missing server host", $me);
@@ -242,6 +283,8 @@ sub send_frame : method {
     # check that the object is usable
     Net::STOMP::Client::Error::report("lost connection")
 	unless $self->_io();
+    # handle global send timeout
+    $timeout = $self->_timeout("send") unless defined($timeout);
     # always check the sent frame
     $frame->check() or return();
     # keep track of receipts
@@ -579,7 +622,7 @@ sub connect : method {
     $self->send_frame($frame, $timeout) or return();
     $session = $self->wait_for_frames(
 	callback => sub { return($self->session()) },
-	timeout  => $self->timeout() || 10,
+	timeout  => $self->_timeout("connected"),
     );
     return($self) if $session;
     Net::STOMP::Client::Error::report("Net::STOMP::Client->connect(): %s",
@@ -834,8 +877,8 @@ the port number of the STOMP service
 
 =item C<timeout>
 
-the maximum time (in seconds) allowed to connect to broker (TCP level),
-also the maximum time to wait for a CONNECTED frame from broker (STOMP level)
+the maximum time (in seconds) for various operations, see the L</TIMEOUTS>
+section for more information
 
 =item C<sockopts>
 
@@ -889,6 +932,42 @@ private key
 =back
 
 For more information, see L<IO::Socket::SSL>.
+
+=head1 TIMEOUTS
+
+By default, when sending STOMP frames, the module waits until the
+frame indeed has been sent (from the socket point of view). In case
+the server is stuck or unusable, the module can therefore hang.
+
+When creating the Net::STOMP::Client object, you can pass a C<timeout>
+attribute to better control how certain operations handle timeouts.
+
+This attribute should contain a reference to hash with the following
+keys:
+
+=over
+
+=item connect
+
+TCP-level timeout that will be given to the underlying
+L<IO::Socket::INET> or L<IO::Socket::SSL> object (default: none)
+
+=item connected
+
+timeout used while waiting for the initial CONNECTED frame from the
+broker (default: 10)
+
+=item send
+
+timeout used while trying to send any frame (default: none)
+
+=back
+
+All values are in seconds. No timeout means wait until the operation
+succeeds.
+
+As a shortcut, the C<timeout> attribute can also be a scalar. In this
+case, only the C<connect> and C<connected> operations use this value.
 
 =head1 STOMP METHODS
 

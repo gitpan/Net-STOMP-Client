@@ -1,10 +1,11 @@
 # http://module-build.sourceforge.net/META-spec.html
 #XXXXXXX This is a prototype!!!  It will change in the future!!! XXXXX#
 name:         Net-STOMP-Client
-version:      0.9.1
+version:      0.9.2
 version_from: 
 installdirs:  site
 requires:
+    Encode:                        0
     IO::Select:                    0
     IO::Socket::INET:              0
     IO::Socket::SSL:               0

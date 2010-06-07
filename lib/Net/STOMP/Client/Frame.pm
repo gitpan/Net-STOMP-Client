@@ -13,7 +13,7 @@
 package Net::STOMP::Client::Frame;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.18 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.20 $ =~ /(\d+)\.(\d+)/);
 
 #
 # Object Oriented definition
@@ -27,6 +27,7 @@ Net::STOMP::Client::OO::methods(qw(command headers body));
 # used modules
 #
 
+use Encode qw();
 use Net::STOMP::Client::Debug;
 use Net::STOMP::Client::Error;
 
@@ -35,9 +36,12 @@ use Net::STOMP::Client::Error;
 #
 
 our(
-    $CheckLevel,         # level of checking performed by the check() method
-    $HeaderRegexp,	 # regular expression matching a header name
-    %CommandHeader,	 # hash of expected commands and headers
+    $UTF8Header,     # true if header should be UTF-8 encoded/decoded
+    $UTF8Body,       # true if body should be UTF-8 encoded/decoded
+    $UTF8Strict,     # true if UTF-8 encoding/decoding should be strict
+    $CheckLevel,     # level of checking performed by the check() method
+    $HeaderRegexp,   # regular expression matching a header name
+    %CommandHeader,  # hash of expected commands and headers
 );
 
 $CheckLevel = 2;
@@ -73,9 +77,10 @@ sub header : method {
 
 sub decode ($) {
     my($string) = @_;
-    my($me, $index, $command, $length, $headers, $line, $body, $frame);
+    my($me, $utfchk, $index, $command, $length, $temp, $headers, $line, $body, $frame);
 
     $me = "Net::STOMP::Client::Frame::decode()";
+    $utfchk = $UTF8Strict ? Encode::FB_CROAK : Encode::FB_DEFAULT;
     # look for command
     $index = index($string, "\n", 1);
     return(0) unless $index >= 0;
@@ -95,7 +100,12 @@ sub decode ($) {
     # at this point we know we should have at least the headers
     $headers = {};
     if ($index > $length) {
-	foreach $line (split(/\n/, substr($string, $length + 1, $index - $length - 1))) {
+	$temp = substr($string, $length + 1, $index - $length - 1);
+	# optionally handle UTF-8 header decoding
+	if ($UTF8Header) {
+	    $temp = Encode::decode("UTF-8", $temp, $utfchk);
+	}
+	foreach $line (split(/\n/, $temp)) {
 	    unless ($line =~ /^($HeaderRegexp)\s*:\s*(.*?)\s*$/o) {
 		Net::STOMP::Client::Error::report("%s: invalid header: %s", $me, $line);
 		return();
@@ -119,6 +129,14 @@ sub decode ($) {
     # at this point we know we should have at least the body
     $body = substr($string, $index + 2, $length);
 
+    # optionally handle UTF-8 body decoding
+    if ($UTF8Body) {
+	# STOMP 1.0 does not specify how or when the body is encoded
+	# here we decode it iff what has been received is valid UTF-8 encoded data
+	eval { $temp = Encode::decode("UTF-8", $body, Encode::FB_CROAK) };
+	$body = $temp unless $@;
+    }
+
     # build the frame and truncate the given string
     $frame = Net::STOMP::Client::Frame->new(
         command => $command,
@@ -139,13 +157,19 @@ sub decode ($) {
 
 sub encode : method {
     my($self) = @_;
-    my($string, $headers, $body, $content_length, $key);
+    my($string, $headers, $body, $utfchk, $content_length, $key);
 
     # setup
     $headers = $self->headers();
     $headers = {} unless defined($headers);
     $body = $self->body();
     $body = "" unless defined($body);
+    $utfchk = $UTF8Strict ? Encode::FB_CROAK : Encode::FB_DEFAULT;
+
+    # optionally handle UTF-8 body encoding (before content-length handling)
+    if ($UTF8Body) {
+	$body = Encode::encode("UTF-8", $body, $utfchk) if Encode::is_utf8($body);
+    }
 
     # handle the content-length header
     if (defined($headers->{"content-length"})) {
@@ -159,7 +183,7 @@ sub encode : method {
 	    unless $body eq "";
     }
 
-    # encode
+    # encode the command and header
     $string = $self->command() . "\n";
     foreach $key (keys(%$headers)) {
 	next if $key eq "content-length";
@@ -168,9 +192,13 @@ sub encode : method {
     if (defined($content_length)) {
 	$string .= "content-length:" . $content_length . "\n";
     }
-    $string .= "\n$body\0";
 
-    return($string);
+    # optionally handle UTF-8 header encoding
+    if ($UTF8Header) {
+	$string = Encode::encode("UTF-8", $string, $utfchk);
+    }
+
+    return("$string\n$body\0");
 }
 
 #
@@ -413,15 +441,15 @@ Net::STOMP::Client::Frame - Frame support for Net::STOMP::Client
 This module provides an object oriented interface to manipulate STOMP frames.
 
 A frame object has the following attributes: C<command>, C<headers>
-and C<body>. The C<headers> must be a reference to hash of header key,
-value pairs.
+and C<body>. The C<headers> must be a reference to a hash of header
+key/value pairs.
 
 The check() method verifies that the frame is well-formed. For
 instance, it must contain a C<command> made of uppercase letters.
 See below for more information.
 
-The header() method can be used to directly access (read only) a given
-header key. For instance:
+The header() method can be used to directly access (in read-only mode)
+a given header key. For instance:
 
   $msgid = $frame->header("message-id");
 
@@ -434,8 +462,8 @@ Net::STOMP::Client and are not expected to be used elsewhere.
 =head1 CONTENT LENGTH
 
 The "content-length" header is special because it is used to indicate
-the end of a frame but also the JMS type of the message in ActiveMQ as
-per L<http://activemq.apache.org/stomp.html>.
+the length of the body but also the JMS type of the message in
+ActiveMQ as per L<http://activemq.apache.org/stomp.html>.
 
 If you do not supply a "content-length" header, following the protocol
 recommendations, a "content-length" header will be added if the frame
@@ -455,6 +483,42 @@ of this:
       "body"           => "hello world!",
       "content-length" => "",
   );
+
+=head1 STRING ENCODING
+
+The STOMP 1.0 specification does not define which encoding should be
+used to serialize frames. So, by default, this module assumes that
+what has been given by the user or by the server is a ready-to-use
+sequence of bytes and it does not perform any further encoding or
+decoding.
+
+However, for convenience, three global variables can be used to
+automatically perform some encoding/decoding.
+
+If $Net::STOMP::Client::Frame::UTF8Header is true, the module will use
+UTF-8 to encode/decode the header part of the frame.
+
+If $Net::STOMP::Client::Frame::UTF8Body is true, the module will:
+
+=over
+
+=item . encode user-supplied body
+if the UTF-8 Flag is true, as per Encode::is_utf8()
+
+=item . decode server-supplied body
+if the received bytes string is a valid UTF-8 encoded string
+
+=back
+
+Note: in case the body is encoded, the "content-length" header may not
+match the body string length.
+
+If $Net::STOMP::Client::Frame::UTF8Strict is true, all
+encoding/decoding operations will be stricter and will report a fatal
+error when given malformed input.
+
+Perl's standard Encode module is used for all encoding/decoding
+operations.
 
 =head1 FRAME CHECKING
 
@@ -531,6 +595,10 @@ all header keys must be known/expected
 
 A violation of any of these checks trigger an error in the check()
 method.
+
+=head1 SEE ALSO
+
+L<Encode>.
 
 =head1 AUTHOR
 
