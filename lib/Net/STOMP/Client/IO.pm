@@ -13,7 +13,7 @@
 package Net::STOMP::Client::IO;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.13 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.16 $ =~ /(\d+)\.(\d+)/);
 
 #
 # Object Oriented definition
@@ -21,7 +21,7 @@ our $VERSION = sprintf("%d.%02d", q$Revision: 1.13 $ =~ /(\d+)\.(\d+)/);
 
 use Net::STOMP::Client::OO;
 our(@ISA) = qw(Net::STOMP::Client::OO);
-Net::STOMP::Client::OO::methods(qw(_socket _select _buffer));
+Net::STOMP::Client::OO::methods(qw(_socket _select _inbuf _outbuf _error));
 
 #
 # used modules
@@ -30,7 +30,14 @@ Net::STOMP::Client::OO::methods(qw(_socket _select _buffer));
 use Net::STOMP::Client::Debug;
 use Net::STOMP::Client::Error;
 use IO::Select;
+use Time::HiRes qw();
 use UNIVERSAL qw();
+
+#
+# constants
+#
+
+use constant MAX_CHUNK => 8192;
 
 #
 # constructor
@@ -48,12 +55,15 @@ sub new : method {
     $select = IO::Select->new();
     $select->add($socket);
     $self->_select($select);
-    $self->_buffer("");
+    $self->_inbuf("");
+    $self->_outbuf("");
     return($self);
 }
 
 #
-# destructor
+# destructor to nicely shutdown+close the socket
+#
+# reference: http://www.perlmonks.org/?node=108244
 #
 
 sub DESTROY {
@@ -68,7 +78,7 @@ sub DESTROY {
 	    $ignored = shutdown($socket, 2);
 	} else {
 	    # this must be an IO::Socket::SSL object so it is better not
-	    # to call shutdown(), see IO::Socket::SSL's man page
+	    # to call shutdown(), see IO::Socket::SSL's man page for more info
 	}
 	# the following will cleanly auto-close the socket
 	$self->_socket(undef);
@@ -76,36 +86,149 @@ sub DESTROY {
 }
 
 #
-# try to send the given data
+# write data from outgoing buffer to socket
 #
-# note: this can still hang if the server starts to read something but then
-# stops accepting new data before the end; this could happen with huge messages
-# but we cannot do much about it since we want frames to be sent atomically...
+
+sub _buf2sock : method {
+    my($self, %option) = @_;
+    my($towrite, $maxtime, $chunk, $written, $count, $remaining);
+
+    # we cannot write anything if the socket is in error
+    return() if $self->_error();
+    # find out how much we should write
+    $towrite = length($self->{_outbuf});
+    $towrite = $option{size} if $option{size} and $option{size} < $towrite;
+    return(0) unless $towrite > 0;
+    # timer starts now
+    $maxtime = Time::HiRes::time() + $option{timeout} if $option{timeout};
+    # use select() to check if we can write something
+    return(0) unless $self->_select()->can_write($option{timeout});
+    # try to write, in a loop, until we are done
+    $written = 0;
+    while (1) {
+	# write one chunk
+	$chunk = $towrite;
+	$chunk = MAX_CHUNK if $chunk > MAX_CHUNK;
+	$count = syswrite($self->_socket(), $self->{_outbuf}, $chunk);
+	unless (defined($count)) {
+	    $self->_error("cannot syswrite(): $!");
+	    return();
+	}
+	# update where we are
+	if ($count) {
+	    $written += $count;
+	    $towrite -= $count;
+	    substr($self->{_outbuf}, 0, $count) = "";
+	}
+	# stop if enough has been written
+	last if $towrite <= 0;
+	# check where we are with timing
+	if (not defined($option{timeout})) {
+	    # timeout = undef => blocking
+	    last unless $self->_select()->can_write();
+	} elsif ($option{timeout}) {
+	    # timeout <> 0 => try once more if not too late
+	    $remaining = $maxtime - Time::HiRes::time();
+	    last if $remaining <= 0;
+	    last unless $self->_select()->can_write($remaining);
+	} else {
+	    # timeout = 0 => non-blocking
+	    last unless $self->_select()->can_write(0);
+	}
+    }
+    # return what has been written
+    return($written);
+}
+
+#
+# read data from socket to incoming buffer
+#
+
+sub _sock2buf : method {
+    my($self, %option) = @_;
+    my($toread, $maxtime, $chunk, $read, $count, $remaining);
+
+    # we cannot read anything if the socket is in error
+    return() if $self->_error();
+    # find out how much we should read
+    if ($option{size}) {
+	$toread = $option{size};
+	return(0) unless $toread > 0;
+    }
+    # timer starts now
+    $maxtime = Time::HiRes::time() + $option{timeout} if $option{timeout};
+    # use select() to check if we can read something
+    return(0) unless $self->_select()->can_read($option{timeout});
+    # try to read, in a loop, until we are done
+    $read = 0;
+    while (1) {
+	# read one chunk
+	$chunk = $option{size} ? $toread : MAX_CHUNK;
+	$chunk = MAX_CHUNK if $chunk > MAX_CHUNK;
+	$count = sysread($self->_socket(), $self->{_inbuf}, $chunk, length($self->{_inbuf}));
+	unless (defined($count)) {
+	    $self->_error("cannot sysread(): $!");
+	    return();
+	}
+	unless ($count) {
+	    $self->_error("cannot sysread(): EOF");
+	    last if $read;
+	    return();
+	}
+	# update where we are
+	$read   += $count;
+	$toread -= $count if $option{size};
+	# stop if enough has been read
+	if ($option{size}) {
+	    last if $toread <= 0;
+	} else {
+	    # no minimum size given, we stop as soon we read any data
+	    last;
+	}
+	# check where we are with timing
+	if (not defined($option{timeout})) {
+	    # timeout = undef => blocking
+	    last unless $self->_select()->can_read();
+	} elsif ($option{timeout}) {
+	    # timeout <> 0 => try once more if not too late
+	    $remaining = $maxtime - Time::HiRes::time();
+	    last if $remaining <= 0;
+	    last unless $self->_select()->can_read($remaining);
+	} else {
+	    # timeout = 0 => non-blocking
+	    last unless $self->_select()->can_read(0);
+	}
+    }
+    # return what has been read
+    return($read);
+}
+
+#
+# try to send the given data
 #
 
 sub send_data : method {
     my($self, $buffer, $timeout) = @_;
-    my($me, $length, $done);
+    my($me, $result);
 
     $me = "Net::STOMP::Client::IO::send_data()";
-    return(0)
-	unless $self->_select()->can_write($timeout);
-    $length = length($buffer);
-    Net::STOMP::Client::Debug::report(Net::STOMP::Client::Debug::IO,
-				      "  sending %d bytes", $length);
-    while (length($buffer)) {
-	$done = syswrite($self->_socket(), $buffer);
-	unless (defined($done)) {
-	    Net::STOMP::Client::Error::report("%s: cannot syswrite(): %s", $me, $!);
-	    return();
-	}
-	substr($buffer, 0, $done) = "" if $done;
+    $self->{_outbuf} .= $buffer;
+    $result = $self->_buf2sock(timeout => $timeout);
+    unless (defined($result)) {
+	Net::STOMP::Client::Error::report("%s: %s", $me, $self->_error());
+	return();
     }
-    return($length)
+    if (length($self->{_outbuf})) {
+	Net::STOMP::Client::Error::report("%s: could not send all data!", $me);
+	return();
+    }
+    Net::STOMP::Client::Debug::report(Net::STOMP::Client::Debug::IO,
+				      "  sent %d bytes", $result);
+    return($result);
 }
 
 #
-# try to receive some data
+# try to receive as much data as possible
 #
 # note: we suck all the available data since we do not know when to stop as we
 # have no a priori knowledge on the size of the next frame; this should not be
@@ -114,36 +237,25 @@ sub send_data : method {
 
 sub receive_data : method {
     my($self, $timeout) = @_;
-    my($me, $buffer, $length, $done);
+    my($me, $result, $count);
 
     $me = "Net::STOMP::Client::IO::receive_data()";
-    return(0)
-	unless $self->_select()->can_read($timeout);
-    $buffer = $self->_buffer();
-    $length = 0;
-    while (1) {
-	$done = sysread($self->_socket(), $buffer, 8192, length($buffer));
-	unless (defined($done)) {
-	    Net::STOMP::Client::Error::report("%s: cannot sysread(): %s", $me, $!);
-	    return();
-	}
-	unless ($done) {
-	    if ($length) {
-		# we read some data already... stop here to process it
-		last;
-	    } else {
-		# no previously read data read and EOF... give up
-		Net::STOMP::Client::Error::report("%s: cannot sysread(): EOF", $me);
-		return();
-	    }
-	}
-	Net::STOMP::Client::Debug::report(Net::STOMP::Client::Debug::IO,
-					  "  received %d bytes", $done);
-	$length += $done;
-	last unless $self->_select()->can_read(0);
+    $result = $self->_sock2buf(timeout => $timeout);
+    unless (defined($result)) {
+	Net::STOMP::Client::Error::report("%s: %s", $me, $self->_error());
+	return();
     }
-    $self->_buffer($buffer);
-    return($length);
+    if ($result) {
+	# we did receive some data, try to get more without blocking
+	$count = $self->_sock2buf(timeout => 0);
+	while ($count) {
+	    $result += $count;
+	    $count = $self->_sock2buf(timeout => 0);
+	}
+    }
+    Net::STOMP::Client::Debug::report(Net::STOMP::Client::Debug::IO,
+				      "  received %d bytes", $result);
+    return($result);
 }
 
 1;
@@ -164,3 +276,5 @@ used elsewhere.
 =head1 AUTHOR
 
 Lionel Cons L<http://cern.ch/lionel.cons>
+
+Copyright CERN 2010

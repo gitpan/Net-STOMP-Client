@@ -13,7 +13,7 @@
 package Net::STOMP::Client::OO;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.7 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.8 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -104,3 +104,5 @@ is equivalent to:
 =head1 AUTHOR
 
 Lionel Cons L<http://cern.ch/lionel.cons>
+
+Copyright CERN 2010

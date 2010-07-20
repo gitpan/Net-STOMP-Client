@@ -13,7 +13,7 @@
 package Net::STOMP::Client;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.63 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.65 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -309,21 +309,21 @@ sub receive_frame : method {
     Net::STOMP::Client::Error::report("lost connection")
 	unless $self->_io();
     # first try to use the current buffer
-    $buffer = $self->_io()->_buffer();
+    $buffer = $self->_io()->_inbuf();
     $frame = Net::STOMP::Client::Frame::decode($buffer);
     return() unless defined($frame);
     unless ($frame) {
 	# not enough data in buffer for a complete frame
 	$done = $self->_io()->receive_data($timeout);
 	return($done) unless $done;
-	$buffer = $self->_io()->_buffer();
+	$buffer = $self->_io()->_inbuf();
 	# try once more with new buffer
 	$frame = Net::STOMP::Client::Frame::decode($buffer);
 	return() unless defined($frame);
 	return(0) unless $frame;
     }
     # update the buffer (which must have changed)
-    $self->_io()->_buffer($buffer);
+    $self->_io()->_inbuf($buffer);
     # always check the received frame
     $frame->check() or return();
     # so far so good
@@ -1222,3 +1222,5 @@ L<Net::STOMP::Client::Error>.
 =head1 AUTHOR
 
 Lionel Cons L<http://cern.ch/lionel.cons>
+
+Copyright CERN 2010

@@ -13,7 +13,7 @@
 package Net::STOMP::Client::Frame;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.20 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.21 $ =~ /(\d+)\.(\d+)/);
 
 #
 # Object Oriented definition
@@ -603,3 +603,5 @@ L<Encode>.
 =head1 AUTHOR
 
 Lionel Cons L<http://cern.ch/lionel.cons>
+
+Copyright CERN 2010

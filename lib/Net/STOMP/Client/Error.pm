@@ -13,7 +13,7 @@
 package Net::STOMP::Client::Error;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.6 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.7 $ =~ /(\d+)\.(\d+)/);
 
 #
 # global variables
@@ -67,3 +67,5 @@ $Net::STOMP::Client::Error::Message.
 =head1 AUTHOR
 
 Lionel Cons L<http://cern.ch/lionel.cons>
+
+Copyright CERN 2010

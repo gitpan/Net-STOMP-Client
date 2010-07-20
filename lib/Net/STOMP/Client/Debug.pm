@@ -13,7 +13,7 @@
 package Net::STOMP::Client::Debug;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.9 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.10 $ =~ /(\d+)\.(\d+)/);
 
 #
 # constants
@@ -100,3 +100,5 @@ input/output bytes
 =head1 AUTHOR
 
 Lionel Cons L<http://cern.ch/lionel.cons>
+
+Copyright CERN 2010
