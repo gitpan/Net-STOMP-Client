@@ -1,5 +1,14 @@
 Revision history for Net-STOMP-Client
 
+0.9.4	Wed Oct  6 2010
+	* Added STOMP 1.1 support (experimental).
+	* Changed encoding handling in Net::STOMP::Client::Frame to be
+	  compatible with STOMP 1.1
+	* Added Net::STOMP::Client::Peer to keep track of peer information.
+	* Added Net::STOMP::Client::Protocol to isolate protocol information.
+	* Added more tests, some optionally using a broker connection.
+	* Improved the documentation.
+
 0.9.3	Tue Jul 20 2010
 	* Rewrote the I/O layer to make it more robust.
 

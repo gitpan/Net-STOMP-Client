@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Net-STOMP-Client
-version:            0.9.3
+version:            0.9.4
 abstract:           STOMP object oriented client module
 author:
     - Lionel Cons <lionel.cons@cern.ch>
@@ -12,6 +12,7 @@ build_requires:
     ExtUtils::MakeMaker:  0
 requires:
     Encode:            0
+    Exporter:          0
     IO::Select:        0
     IO::Socket::INET:  0
     List::Util:        0

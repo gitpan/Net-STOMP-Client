@@ -13,7 +13,7 @@
 package Net::STOMP::Client::Frame;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.21 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.32 $ =~ /(\d+)\.(\d+)/);
 
 #
 # Object Oriented definition
@@ -30,6 +30,7 @@ Net::STOMP::Client::OO::methods(qw(command headers body));
 use Encode qw();
 use Net::STOMP::Client::Debug;
 use Net::STOMP::Client::Error;
+use Net::STOMP::Client::Protocol qw(:CONSTANTS :VARIABLES);
 
 #
 # global variables
@@ -37,11 +38,10 @@ use Net::STOMP::Client::Error;
 
 our(
     $UTF8Header,     # true if header should be UTF-8 encoded/decoded
-    $UTF8Body,       # true if body should be UTF-8 encoded/decoded
-    $UTF8Strict,     # true if UTF-8 encoding/decoding should be strict
+    $BodyEncode,     # true if body encoding/decoding should be dealt with
+    $StrictEncode,   # true if encoding/decoding should be strict
     $CheckLevel,     # level of checking performed by the check() method
     $HeaderRegexp,   # regular expression matching a header name
-    %CommandHeader,  # hash of expected commands and headers
 );
 
 $CheckLevel = 2;
@@ -67,6 +67,19 @@ sub header : method {
 }
 
 #
+# guess the encoding to use from the content type
+#
+
+sub _encoding ($) {
+    my($type) = @_;
+
+    return() unless $type;
+    return("UTF-8") if $type =~ /^text\/[\w\-]+$/;
+    return($1) if ";$type;" =~ /\;\s*charset=\"?([\w\-]+)\"?\s*\;/;
+    return();
+}
+
+#
 # decode the given string and return a complete frame object, if possible
 #
 # side effect: in case a frame is successfully found, the given string is
@@ -75,24 +88,30 @@ sub header : method {
 # return zero if no complete frame is found and undef on error
 #
 
-sub decode ($) {
-    my($string) = @_;
-    my($me, $utfchk, $index, $command, $length, $temp, $headers, $line, $body, $frame);
+sub _decode ($$) {
+    my($string, $version) = @_;
+    my($me, $fb, $index, $command, $length, $temp, $headers, $line, $body, $frame);
 
-    $me = "Net::STOMP::Client::Frame::decode()";
-    $utfchk = $UTF8Strict ? Encode::FB_CROAK : Encode::FB_DEFAULT;
+    $me = "Net::STOMP::Client::Frame::_decode()";
+    $fb = $StrictEncode ? Encode::FB_CROAK : Encode::FB_DEFAULT;
+    # newlines are accepted by STOMP as "line noise" to be ignored outside frames
+    if ($string =~ /^(\n+)/) {
+	# we strip leading newlines
+	substr($_[0], 0, length($1)) = "";
+	$string = $_[0];
+    }
     # look for command
     $index = index($string, "\n", 1);
     return(0) unless $index >= 0;
     # at this point we know we should have at least the command
     # argh! some servers send a spurious newline after the final NULL byte so we
     # may see it at the beginning of the next frame, i.e. here...
-    unless ($string =~ /^(\n?([A-Z]{2,16}))\n/) {
+    unless ($string =~ /^([A-Z]{2,16})\n/) {
 	Net::STOMP::Client::Error::report("%s: invalid or missing command", $me);
 	return();
     }
-    $length = length($1);
-    $command = $2;
+    $command = $1;
+    $length = length($command);
 
     # look for headers
     $index = index($string, "\n\n", $length);
@@ -102,15 +121,32 @@ sub decode ($) {
     if ($index > $length) {
 	$temp = substr($string, $length + 1, $index - $length - 1);
 	# optionally handle UTF-8 header decoding
-	if ($UTF8Header) {
-	    $temp = Encode::decode("UTF-8", $temp, $utfchk);
+	if ($UTF8Header or
+	    (not defined($UTF8Header) and defined($version) and $version eq "1.1")) {
+	    $temp = Encode::decode("UTF-8", $temp, $fb);
 	}
-	foreach $line (split(/\n/, $temp)) {
-	    unless ($line =~ /^($HeaderRegexp)\s*:\s*(.*?)\s*$/o) {
-		Net::STOMP::Client::Error::report("%s: invalid header: %s", $me, $line);
-		return();
+	if ($version and $version eq "1.1") {
+	    # STOMP 1.1 behavior:
+	    #  - space is significant in the header
+	    #  - "only the first header entry should be used"
+	    foreach $line (split(/\n/, $temp)) {
+		unless ($line =~ /^($HeaderRegexp):(.*)$/o) {
+		    Net::STOMP::Client::Error::report("%s: invalid header: %s", $me, $line);
+		    return();
+		}
+		$headers->{$1} = $2 unless exists($headers->{$1});
 	    }
-	    $headers->{$1} = $2;
+	} else {
+	    # STOMP 1.0 behavior:
+	    #  - space is not significant in the header
+	    #  - last header wins (not specified explicitly but reasonable default)
+	    foreach $line (split(/\n/, $temp)) {
+		unless ($line =~ /^($HeaderRegexp)\s*:\s*(.*?)\s*$/o) {
+		    Net::STOMP::Client::Error::report("%s: invalid header: %s", $me, $line);
+		    return();
+		}
+		$headers->{$1} = $2;
+	    }
 	}
     }
 
@@ -129,12 +165,11 @@ sub decode ($) {
     # at this point we know we should have at least the body
     $body = substr($string, $index + 2, $length);
 
-    # optionally handle UTF-8 body decoding
-    if ($UTF8Body) {
-	# STOMP 1.0 does not specify how or when the body is encoded
-	# here we decode it iff what has been received is valid UTF-8 encoded data
-	eval { $temp = Encode::decode("UTF-8", $body, Encode::FB_CROAK) };
-	$body = $temp unless $@;
+    # optionally handle body decoding
+    if ($BodyEncode or
+	(not defined($BodyEncode) and defined($version) and $version eq "1.1")) {
+	$temp = _encoding($headers->{"content-type"});
+	$body = Encode::decode($temp, $body, $fb) if $temp;
     }
 
     # build the frame and truncate the given string
@@ -144,7 +179,7 @@ sub decode ($) {
 	body    => $body,
     );
     substr($_[0], 0, $index + $length + 3) = "";
-    # argh! some servers send a spurious newline after the NULL byte...
+    # we check immediately for a spurious trailing newline...
     substr($_[0], 0, 1) = "" if length($_[0]) and substr($_[0], 0, 1) eq "\n";
 
     # so far so good ;-)
@@ -155,20 +190,22 @@ sub decode ($) {
 # encode the given frame object
 #
 
-sub encode : method {
-    my($self) = @_;
-    my($string, $headers, $body, $utfchk, $content_length, $key);
+sub _encode : method {
+    my($self, $version) = @_;
+    my($string, $headers, $body, $fb, $content_length, $key);
 
     # setup
     $headers = $self->headers();
     $headers = {} unless defined($headers);
     $body = $self->body();
     $body = "" unless defined($body);
-    $utfchk = $UTF8Strict ? Encode::FB_CROAK : Encode::FB_DEFAULT;
+    $fb = $StrictEncode ? Encode::FB_CROAK : Encode::FB_DEFAULT;
 
-    # optionally handle UTF-8 body encoding (before content-length handling)
-    if ($UTF8Body) {
-	$body = Encode::encode("UTF-8", $body, $utfchk) if Encode::is_utf8($body);
+    # optionally handle body encoding (before content-length handling)
+    if ($BodyEncode or
+	(not defined($BodyEncode) and defined($version) and $version eq "1.1")) {
+	$string = _encoding($headers->{"content-type"});
+	$body = Encode::encode($string, $body, $fb) if $string;
     }
 
     # handle the content-length header
@@ -194,8 +231,9 @@ sub encode : method {
     }
 
     # optionally handle UTF-8 header encoding
-    if ($UTF8Header) {
-	$string = Encode::encode("UTF-8", $string, $utfchk);
+    if ($UTF8Header or
+	(not defined($UTF8Header) and defined($version) and $version eq "1.1")) {
+	$string = Encode::encode("UTF-8", $string, $fb);
     }
 
     return("$string\n$body\0");
@@ -217,7 +255,7 @@ sub debug : method {
 	$headers = $self->headers();
 	$headers = {} unless defined($headers);
 	foreach $key (keys(%$headers)) {
-	    Net::STOMP::Client::Debug::report(-1, "  | %s: %s", $key, $headers->{$key});
+	    Net::STOMP::Client::Debug::report(-1, "  | %s:%s", $key, $headers->{$key});
 	}
     }
     # FIXME: add the possibility to dump the frame body
@@ -229,94 +267,13 @@ sub debug : method {
 #                                                                              #
 #---############################################################################
 
-#
-# command/headers declarations (http://stomp.codehaus.org/Protocol)
-#
-
-# client -> server
-$CommandHeader{CONNECT}     = { "login" => 1, "passcode" => 2 };
-$CommandHeader{SEND}        = { "destination" => 1, "transaction" => 0 };
-$CommandHeader{SUBSCRIBE}   = { "destination" => 1, "selector" => 1, "ack" => 0, "id" => 0 };
-$CommandHeader{UNSUBSCRIBE} = { "destination" => 1, "id" => 1 };
-$CommandHeader{BEGIN}       = { "transaction" => 1 };
-$CommandHeader{COMMIT}      = { "transaction" => 1 };
-$CommandHeader{ABORT}       = { "transaction" => 1 };
-$CommandHeader{ACK}         = { "message-id" => 1, "transaction" => 0 };
-$CommandHeader{DISCONNECT}  = {};
-
-# most client commands can have an optional receipt header
-foreach my $command (keys(%CommandHeader)) {
-    $CommandHeader{$command}{receipt} = 0
-	unless $command eq "CONNECT";
-}
-
-# server -> client
-$CommandHeader{CONNECTED}   = { "session" => 1 };
-$CommandHeader{RECEIPT}     = { "receipt-id" => 1 };
-$CommandHeader{MESSAGE}     = { "message-id" => 1, "destination" => 2, "subscription" => 0 };
-$CommandHeader{ERROR}       = { "message" => 1 };
-
-# protocol-wise, any frame can have a content-length header
-foreach my $command (keys(%CommandHeader)) {
-    $CommandHeader{$command}{"content-length"} = 0;
-}
-
-# STOMP extensions for JMS message semantics (http://activemq.apache.org/stomp.html)
-# plus JMSXUserID (http://activemq.apache.org/jmsxuserid.html)
-foreach my $key (qw(correlation-id expires persistent priority reply-to type
-		    JMSXGroupID JMSXGroupSeq JMSXUserID)) {
-    $CommandHeader{SEND}{$key} = 0;
-    $CommandHeader{MESSAGE}{$key} = 0;
-}
-
-# ActiveMQ extensions to STOMP (http://activemq.apache.org/stomp.html)
-$CommandHeader{CONNECT}{"client-id"} = 0;
-foreach my $key (qw(dispatchAsync exclusive maximumPendingMessageLimit noLocal
-		    prefetchSize priority retroactive subscriptionName)) {
-    $CommandHeader{SUBSCRIBE}{"activemq.$key"} = 0;
-}
-
-# ActiveMQ extensions for advisory messages (http://activemq.apache.org/advisory-message.html)
-foreach my $key (qw(originBrokerId originBrokerName originBrokerURL orignalMessageId
-		    consumerCount producerCount consumerId producerId usageName)) {
-    $CommandHeader{MESSAGE}{$key} = 0;
-}
-
-# STOMP JMS Bindings (http://stomp.codehaus.org/StompJMS)
-$CommandHeader{SUBSCRIBE}{"no-local"} = 0;
-$CommandHeader{SUBSCRIBE}{"durable-subscriber-name"} = 0;
-
-# RabbitMQ extensions to STOMP (http://dev.rabbitmq.com/wiki/StompGateway)
-foreach my $command (keys(%CommandHeader)) {
-    $CommandHeader{$command}{"content-type"} = 0;
-}
-$CommandHeader{MESSAGE}{exchange} = 0;
-$CommandHeader{SUBSCRIBE}{routing_key} = 0;
-
-# other undocumented headers :-(
-$CommandHeader{MESSAGE}{timestamp} = 0;
-$CommandHeader{MESSAGE}{redelivered} = 0;
-$CommandHeader{MESSAGE}{JMSXMessageCounter} = 0;
-$CommandHeader{ERROR}{"receipt-id"} = 0;
-
-# and maybe also... (from StompCommandConstants.cpp)
-# const std::string StompCommandConstants::HEADER_REQUESTID = "request-id";
-# const std::string StompCommandConstants::HEADER_RESPONSEID = "response-id";
-# const std::string StompCommandConstants::HEADER_REDELIVERYCOUNT = "redelivery_count";
-# const std::string StompCommandConstants::HEADER_TRANSFORMATION = "transformation";
-# const std::string StompCommandConstants::HEADER_TRANSFORMATION_ERROR = "transformation-error";
-
-#
-# check that the given frame object is valid
-#
-
 sub check : method {
-    my($self) = @_;
-    my($me, $command, $headers, $key, $value, %required, $body);
+    my($self, $version) = @_;
+    my($me, $command, $headers, $body, $key, $value, $flags, $type, $check);
 
     # setup
     return($self) unless $CheckLevel > 0;
-    $me = "Net::STOMP::Client::Frame::check()";
+    $me = "Net::STOMP::Client::Frame->check()";
 
     # check the command (basic)
     $command = $self->command();
@@ -346,63 +303,113 @@ sub check : method {
 		return();
 	    }
 	}
+    } else {
+	$headers = {};
     }
 
     # this is all for level 1...
     return($self) unless $CheckLevel > 1;
 
     # check the command (must be known)
-    unless ($CommandHeader{$command}) {
+    if (defined($version)) {
+	$flags = $CommandFlags{$version}{$command} || $CommandFlags{ANY_VERSION()}{$command};
+    } else {
+	$flags = $CommandFlags{ANY_VERSION()}{$command};
+    }
+    unless ($flags) {
 	Net::STOMP::Client::Error::report("%s: unknown command: %s", $me, $command);
 	return();
     }
+    # FIXME: check that the command matches the direction using FLAG_DIRECTION_*
 
-    # check the headers (keys must be known, value must be expected)
-    foreach $key (keys(%$headers)) {
-	if (exists($CommandHeader{$command}{$key})) {
-	    $value = $headers->{$key};
-	    # FIXME: add more value checks
-	    if ($key =~ /^(content-length|expires|timestamp)$/) {
-		next if $value =~ /^\d+$/;
-		next if $key eq "content-length" and $value eq "";
-	    } elsif ($key eq "ack") {
-		next if $value =~ /^(auto|client)$/;
-	    } else {
-		next;
-	    }
-	    Net::STOMP::Client::Error::report("%s: unexpected header value for %s: %s",
-				      $me, $key, $value);
+    # check the body (must match the expectations)
+    $body = $self->body();
+    $body = "" unless defined($body);
+    if (length($body)) {
+	if (($flags & FLAG_BODY_MASK) == FLAG_BODY_FORBIDDEN) {
+	    Net::STOMP::Client::Error::report("%s: unexpected body for %s", $me, $command);
 	    return();
-	} elsif ($CheckLevel > 2) {
-	    # level 3 only...
-	    Net::STOMP::Client::Error::report("%s: unexpected header key for %s: %s",
-				      $me, $command, $key);
+	}
+    } else {
+	if (($flags & FLAG_BODY_MASK) == FLAG_BODY_MANDATORY) {
+	    Net::STOMP::Client::Error::report("%s: missing body for %s", $me, $command);
 	    return();
 	}
     }
 
-    # check the headers (all required keys are present)
-    foreach $key (keys(%{ $CommandHeader{$command} })) {
-	$value = $CommandHeader{$command}{$key};
-	$required{$value}{$key}++ if $value;
+    # check the headers (all required keys must be present)
+    foreach my $v ($version, ANY_VERSION) {
+	next unless defined($v) and $FieldFlags{$v} and $FieldFlags{$v}{$command};
+	while (($key, $flags) = each(%{ $FieldFlags{$v}{$command} })) {
+	    next unless ($flags & FLAG_FIELD_MASK) == FLAG_FIELD_MANDATORY;
+	    unless (exists($headers->{$key})) {
+		Net::STOMP::Client::Error::report("%s: missing header key for %s: %s",
+						  $me, $command, $key);
+		return();
+	    }
+	}
     }
-    foreach $key (keys(%$headers)) {
-	$value = $CommandHeader{$command}{$key};
-	delete($required{$value}) if $value;
-    }
-    foreach $value (keys(%required)) {
-	$key = join("|", sort(keys(%{ $required{$value} })));
-	Net::STOMP::Client::Error::report("%s: missing header key for %s: %s",
-					  $me, $command, $key);
+
+    # check the headers (keys must be known, values must match expectations)
+    while (($key, $value) = each(%$headers)) {
+	if (defined($version)) {
+	    $flags = $FieldFlags{$version}{$command}{$key} ||
+		$FieldFlags{ANY_VERSION()}{$command}{$key};
+	    $check = $FieldCheck{$version}{$command}{$key} ||
+		$FieldCheck{ANY_VERSION()}{$command}{$key};
+	} else {
+	    $flags = $FieldFlags{ANY_VERSION()}{$command}{$key};
+	    $check = $FieldCheck{ANY_VERSION()}{$command}{$key};
+	}
+	unless ($flags) {
+	    # complain only if level high enough and not a message
+	    if ($CheckLevel > 2 and not $command =~ /^(SEND|MESSAGE)$/) {
+		Net::STOMP::Client::Error::report("%s: unexpected header key for %s: %s",
+						  $me, $command, $key);
+		return();
+	    }
+	    next;
+	}
+	if ($check) {
+	    if (ref($check) eq "Regexp") {
+		goto bad_value unless $value =~ $check;
+	    } elsif (ref($check) eq "CODE") {
+		goto bad_value unless $check->($command, $key, $value);
+	    } else {
+		Net::STOMP::Client::Error::report("%s: unexpected check for %s.%s: %s",
+						  $me, $command, $key, $check);
+		return();
+	    }
+	}
+	$type = $flags & FLAG_TYPE_MASK;
+	next if $type == FLAG_TYPE_UNKNOWN;
+	if ($type == FLAG_TYPE_BOOLEAN) {
+	    next if $value =~ /^(true|false)$/;
+	} elsif ($type == FLAG_TYPE_INTEGER) {
+	    next if $value =~ /^\d+$/;
+	} elsif ($type == FLAG_TYPE_LENGTH) {
+	    next if $value =~ /^\d*$/;
+	} else {
+	    Net::STOMP::Client::Error::report("%s: unexpected type for %s.%s: %d",
+					      $me, $command, $key, $type);
+	    return();
+	}
+	# so far so bad...
+      bad_value:
+	Net::STOMP::Client::Error::report("%s: unexpected header key value for %s.%s: %s",
+					  $me, $command, $key, $value);
 	return();
     }
 
-    # check the absence of body
-    $body = $self->body();
-    $body = "" unless defined($body);
-    if (length($body) and not $command =~ /^(SEND|MESSAGE|ERROR)$/) {
-	Net::STOMP::Client::Error::report("%s: unexpected body for %s", $me, $command);
-	return();
+    # additional checks at command level
+    if (defined($version)) {
+	$check = $CommandCheck{$version}{$command} ||
+	    $CommandCheck{ANY_VERSION()}{$command};
+    } else {
+	$check = $CommandCheck{ANY_VERSION()}{$command};
+    }
+    if ($check) {
+	$check->($command, $headers, $body) or return();
     }
 
     # so far so good
@@ -436,6 +443,9 @@ Net::STOMP::Client::Frame - Frame support for Net::STOMP::Client
   # set the body
   $frame->body("...some data...");
 
+  # directly get a header field
+  $msgid = $frame->header("message-id");
+
 =head1 DESCRIPTION
 
 This module provides an object oriented interface to manipulate STOMP frames.
@@ -444,20 +454,26 @@ A frame object has the following attributes: C<command>, C<headers>
 and C<body>. The C<headers> must be a reference to a hash of header
 key/value pairs.
 
-The check() method verifies that the frame is well-formed. For
-instance, it must contain a C<command> made of uppercase letters.
-See below for more information.
+=head1 FUNCTIONS
 
-The header() method can be used to directly access (in read-only mode)
-a given header key. For instance:
+This module provides the following methods:
 
-  $msgid = $frame->header("message-id");
+=over
 
-The debug() method can be used to dump a frame object on STDERR. So
-far, this excludes the frame body.
+=item check()
 
-The decode() function and the encode() method are used internally by
-Net::STOMP::Client and are not expected to be used elsewhere.
+check that the frame is well-formed, see below for more information
+
+=item header(NAME)
+
+return the value associated with the given name in the header
+
+=item debug([TAG])
+
+if debugging is enabled, dump a frame object on STDERR (this currently
+excludes the frame body)
+
+=back
 
 =head1 CONTENT LENGTH
 
@@ -484,7 +500,7 @@ of this:
       "content-length" => "",
   );
 
-=head1 STRING ENCODING
+=head1 ENCODING
 
 The STOMP 1.0 specification does not define which encoding should be
 used to serialize frames. So, by default, this module assumes that
@@ -492,32 +508,33 @@ what has been given by the user or by the server is a ready-to-use
 sequence of bytes and it does not perform any further encoding or
 decoding.
 
-However, for convenience, three global variables can be used to
-automatically perform some encoding/decoding.
+However, for convenience, three global variables can be used to control
+encoding/decoding.
 
-If $Net::STOMP::Client::Frame::UTF8Header is true, the module will use
-UTF-8 to encode/decode the header part of the frame.
+If $Net::STOMP::Client::Frame::UTF8Header is set to true, the module
+will use UTF-8 to encode/decode the header part of the frame.
 
-If $Net::STOMP::Client::Frame::UTF8Body is true, the module will:
+The STOMP 1.1 specification states that UTF-8 encoding should always
+be used for the header. So, for STOMP 1.1 connections,
+$Net::STOMP::Client::Frame::UTF8Header defaults to true.
 
-=over
+If $Net::STOMP::Client::Frame::BodyEncode is set to true, the module
+will use the C<content-type> header to decide when and how to
+encode/decode the body part of the frame.
 
-=item . encode user-supplied body
-if the UTF-8 Flag is true, as per Encode::is_utf8()
+The STOMP 1.1 specification states that the C<content-type> header
+defines when and how the body is encoded/decoded. So, for STOMP 1.1
+connections, $Net::STOMP::Client::Frame::BodyEncode defaults to true.
+As a consequence, if you use STOMP 1.1 and supply an already encoded
+body, you should set $Net::STOMP::Client::Frame::BodyEncode to false
+to prevent double encoding.
 
-=item . decode server-supplied body
-if the received bytes string is a valid UTF-8 encoded string
-
-=back
-
-Note: in case the body is encoded, the "content-length" header may not
-match the body string length.
-
-If $Net::STOMP::Client::Frame::UTF8Strict is true, all
+If $Net::STOMP::Client::Frame::StrictEncode is true, all
 encoding/decoding operations will be stricter and will report a fatal
-error when given malformed input.
+error when given malformed input. This is done by using the
+Encode::FB_CROAK flag instead of the default Encode::FB_DEFAULT.
 
-Perl's standard Encode module is used for all encoding/decoding
+N.B.: Perl's standard Encode module is used for all encoding/decoding
 operations.
 
 =head1 FRAME CHECKING
@@ -525,8 +542,11 @@ operations.
 Net::STOMP::Client calls the check() method for every frame about to
 be sent and for every received frame.
 
+The check() method verifies that the frame is well-formed. For
+instance, it must contain a C<command> made of uppercase letters.
+
 The global variable $Net::STOMP::Client::Frame::CheckLevel controls
-the amount of checking that is performed.
+the amount of checking that is performed. The default value is 2.
 
 =over
 
@@ -548,7 +568,7 @@ the header keys must be good looking and their value must be defined
 
 =back
 
-=item 2 (default)
+=item 2
 
 =over
 
@@ -562,18 +582,18 @@ the frame must have a known command
 
 =item *
 
-for known header keys, their value must be good looking (e.g. the
-"timestamp" value must be an integer)
+the presence/absence of the body is checked; for instance, body is not
+expected for a "CONNECT" frame
 
 =item *
 
-the presence of mandatory keys (e.g. "session" for a "CONNECTED"
+the presence of mandatory keys (e.g. "message-id" for a "MESSAGE"
 frame) is checked
 
 =item *
 
-the absence of the body (e.g. no body for a "CONNECT" frame) is
-checked
+for known header keys, their value must be good looking (e.g. the
+"timestamp" value must be an integer)
 
 =back
 
@@ -598,6 +618,7 @@ method.
 
 =head1 SEE ALSO
 
+L<Net::STOMP::Client::Debug>,
 L<Encode>.
 
 =head1 AUTHOR

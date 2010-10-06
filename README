@@ -18,6 +18,8 @@ To install this module, run the following commands:
 	make test
 	make install
 
+To test this module with a STOMP broker, see t/2broker.t.
+
 SUPPORT AND DOCUMENTATION
 
 After installing, you can find documentation for this module with the

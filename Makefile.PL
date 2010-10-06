@@ -6,8 +6,8 @@ my(%param, $emv, $name);
 
 %param = (
     NAME                   => 'Net::STOMP::Client',
-    AUTHOR                 => q{Lionel Cons <lionel.cons@cern.ch>},
-    VERSION                => '0.9.3',
+    AUTHOR                 => 'Lionel Cons <lionel.cons@cern.ch>',
+    VERSION                => '0.9.4',
     ABSTRACT_FROM          => 'lib/Net/STOMP/Client.pm',
     LICENSE                => 'perl',
     PL_FILES               => {},
@@ -17,6 +17,7 @@ my(%param, $emv, $name);
     },
     PREREQ_PM => {
         'Encode'           => 0,
+        'Exporter'         => 0,
         'IO::Select'       => 0,
         'IO::Socket::INET' => 0,
         # IO::Socket::SSL is optional

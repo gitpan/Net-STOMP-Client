@@ -13,7 +13,7 @@
 package Net::STOMP::Client::Error;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.7 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.8 $ =~ /(\d+)\.(\d+)/);
 
 #
 # global variables
@@ -63,6 +63,20 @@ is up to the caller to check the returned value to detect an error (by
 checking if the returned value is defined). The caller can then
 retrieve the last error message which is always stored in
 $Net::STOMP::Client::Error::Message.
+
+=head1 FUNCTIONS
+
+This module provides the following functions:
+
+=over
+
+=item report(FORMAT[, ARGUMENTS])
+
+format the error message using sprintf() and store the result in
+$Net::STOMP::Client::Error::Message; if
+$Net::STOMP::Client::Error::Die is true, use die() to report the error
+
+=back
 
 =head1 AUTHOR
 

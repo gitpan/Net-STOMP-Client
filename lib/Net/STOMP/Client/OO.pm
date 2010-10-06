@@ -13,7 +13,7 @@
 package Net::STOMP::Client::OO;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.8 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.12 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -33,7 +33,7 @@ sub methods (@) {
     foreach $name (@names) {
 	# check the method name
 	die("*** invalid method name: $name\n")
-	    unless $name =~ /^_?[a-z]+$/;
+	    unless $name =~ /^_?[a-z]+(_[a-z]+)*$/;
 	# build the accessor method
 	$sub = sub {
 	    my($self, $value) = @_;
@@ -60,7 +60,7 @@ sub new : method {
 	unless @_ % 2;
     foreach $key (keys(%data)) {
 	die("*** ${class}->new(): unexpected method: $key\n")
-	    unless $key =~ /^_?[a-z]+$/ and UNIVERSAL::can($class, $key);
+	    unless $key =~ /^_?[a-z]+(_[a-z]+)*$/ and UNIVERSAL::can($class, $key);
     }
     $self = \%data;
     bless($self, $class);
@@ -100,6 +100,23 @@ is equivalent to:
   $frame = Net::STOMP::Client::Frame->new();
   $frame->command("MESSAGE");
   $frame->body("...some text...");
+
+=head1 FUNCTIONS
+
+This module provides the following functions and methods:
+
+=over
+
+=item methods(NAMES)
+
+this function is used to declare the list of known attributes/methods
+for the current class
+
+=item new([OPTIONS])
+
+this method implements the inheritable constructor described above
+
+=back
 
 =head1 AUTHOR
 

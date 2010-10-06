@@ -13,7 +13,7 @@
 package Net::STOMP::Client::Debug;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.10 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.11 $ =~ /(\d+)\.(\d+)/);
 
 #
 # constants
@@ -94,6 +94,23 @@ frames sent and received (headers)
 =item Net::STOMP::Client::Debug::IO
 
 input/output bytes
+
+=back
+
+=head1 FUNCTIONS
+
+This module provides the following functions:
+
+=over
+
+=item report(MASK, FORMAT[, ARGUMENTS])
+
+if the current debugging flags match the given mask, give the
+remaining arguments to sprintf() and print the result on STDERR
+
+=item enabled(MASK)
+
+return true if the current debugging flags match the given mask
 
 =back
 
