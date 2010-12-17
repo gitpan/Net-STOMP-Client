@@ -13,7 +13,7 @@
 package Net::STOMP::Client::Protocol;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.5 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.8 $ =~ /(\d+)\.(\d+)/);
 
 #
 # export control
@@ -84,8 +84,9 @@ our(
 );
 
 #
-# STOMP 1.0 spec: http://stomp.codehaus.org/Protocol
-# STOMP 1.1 spec: http://stomp.github.com/stomp-specification-1-1.html
+# references:
+#  - STOMP 1.0: http://stomp.codehaus.org/Protocol
+#  - STOMP 1.1: http://stomp.github.com/stomp-specification-1.1.html
 #
 
 #
@@ -107,25 +108,31 @@ foreach my $command (qw(CONNECTED MESSAGE RECEIPT ERROR)) {
         ($command =~ /^(MESSAGE|ERROR)$/ ? FLAG_BODY_ANY : FLAG_BODY_FORBIDDEN);
 }
 
+# STOMP 1.1 extensions
+$CommandFlags{"1.1"}{NACK} = FLAG_DIRECTION_C2S | FLAG_BODY_FORBIDDEN;
+
 #
 # known fields for both STOMP 1.0 and STOMP 1.1
 #
 
-$FieldFlags{ANY_VERSION()}{CONNECT}{"login"}    = FLAG_FIELD_MANDATORY;
-$FieldFlags{ANY_VERSION()}{CONNECT}{"passcode"} = FLAG_FIELD_MANDATORY;
+$FieldFlags{ANY_VERSION()}{CONNECT}{"login"}    = FLAG_FIELD_OPTIONAL;
+$FieldFlags{ANY_VERSION()}{CONNECT}{"passcode"} = FLAG_FIELD_OPTIONAL;
 
 $FieldFlags{ANY_VERSION()}{SEND}{"destination"} = FLAG_FIELD_MANDATORY;
 $FieldFlags{ANY_VERSION()}{SEND}{"transaction"} = FLAG_FIELD_OPTIONAL;
 
 $FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"destination"} = FLAG_FIELD_MANDATORY;
-$FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"ack"}         = FLAG_FIELD_OPTIONAL;
-# in fact, ack can only contain some values, this is checked elsewhere
-$FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"selector"}    = FLAG_FIELD_OPTIONAL;
-$FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"id"}          = FLAG_FIELD_OPTIONAL;
+# nota bene: ack can only contain some values, this is checked elsewhere
+$FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"ack"} = FLAG_FIELD_OPTIONAL;
+# id is optional in 1.0 but mandatory in 1.1
+$FieldFlags{"1.0"}{SUBSCRIBE}{"id"} = FLAG_FIELD_OPTIONAL;
+$FieldFlags{"1.1"}{SUBSCRIBE}{"id"} = FLAG_FIELD_MANDATORY;
 
-$FieldFlags{ANY_VERSION()}{UNSUBSCRIBE}{"destination"} = FLAG_FIELD_OPTIONAL;
-$FieldFlags{ANY_VERSION()}{UNSUBSCRIBE}{"id"}          = FLAG_FIELD_OPTIONAL;
-# in fact, either destination or id must be present, this is checked elsewhere
+# nota bene: in 1.0, either destination or id must be present
+$FieldFlags{"1.0"}{UNSUBSCRIBE}{"destination"} = FLAG_FIELD_OPTIONAL;
+$FieldFlags{"1.0"}{UNSUBSCRIBE}{"id"} = FLAG_FIELD_OPTIONAL;
+# however for 1.1, only id can be used and it is mandatory
+$FieldFlags{"1.1"}{UNSUBSCRIBE}{"id"} = FLAG_FIELD_MANDATORY;
 
 $FieldFlags{ANY_VERSION()}{BEGIN}{"transaction"} = FLAG_FIELD_MANDATORY;
 
@@ -141,23 +148,14 @@ $FieldFlags{ANY_VERSION()}{ACK}{"transaction"} = FLAG_FIELD_OPTIONAL;
 $FieldFlags{ANY_VERSION()}{CONNECTED}{"session"} = FLAG_FIELD_OPTIONAL;
 
 $FieldFlags{ANY_VERSION()}{MESSAGE}{"destination"}  = FLAG_FIELD_MANDATORY;
-$FieldFlags{ANY_VERSION()}{MESSAGE}{"message-id"}   = FLAG_FIELD_MANDATORY;
-$FieldFlags{ANY_VERSION()}{MESSAGE}{"subscription"} = FLAG_FIELD_OPTIONAL;
+$FieldFlags{ANY_VERSION()}{MESSAGE}{"message-id"} = FLAG_FIELD_MANDATORY;
+# subscription is optional in 1.0 but mandatory in 1.1
+$FieldFlags{"1.0"}{MESSAGE}{"subscription"} = FLAG_FIELD_OPTIONAL;
+$FieldFlags{"1.1"}{MESSAGE}{"subscription"} = FLAG_FIELD_MANDATORY;
 
 $FieldFlags{ANY_VERSION()}{RECEIPT}{"receipt-id"} = FLAG_FIELD_MANDATORY;
 
 $FieldFlags{ANY_VERSION()}{ERROR}{"message"} = FLAG_FIELD_MANDATORY;
-
-# "Any client frame other than CONNECT may specify a receipt header with an arbitrary value."
-foreach my $command (qw(SEND SUBSCRIBE UNSUBSCRIBE BEGIN COMMIT ABORT ACK DISCONNECT)) {
-    $FieldFlags{ANY_VERSION()}{$command}{"receipt"} = FLAG_FIELD_OPTIONAL;
-}
-
-# any frame can have a content-length header which must be an integer
-foreach my $command (keys(%{ $CommandFlags{ANY_VERSION()} })) {
-    $FieldFlags{ANY_VERSION()}{$command}{"content-length"}
-        = FLAG_FIELD_OPTIONAL | FLAG_TYPE_LENGTH;
-}
 
 #
 # STOMP 1.1 extensions
@@ -170,10 +168,35 @@ $FieldFlags{"1.1"}{CONNECT}{"heart-beat"}     = FLAG_FIELD_OPTIONAL;
 $FieldFlags{"1.1"}{CONNECTED}{"version"}    = FLAG_FIELD_MANDATORY;
 $FieldFlags{"1.1"}{CONNECTED}{"heart-beat"} = FLAG_FIELD_OPTIONAL;
 
-# since these are not explicitly flagged as forbidden in 1.0, we flag them as optional...
+$FieldFlags{"1.1"}{ACK}{"subscription"} = FLAG_FIELD_MANDATORY;
+
+$FieldFlags{"1.1"}{NACK}{"subscription"} = FLAG_FIELD_MANDATORY;
+$FieldFlags{"1.1"}{NACK}{"message-id"}  = FLAG_FIELD_MANDATORY;
+$FieldFlags{"1.1"}{NACK}{"transaction"} = FLAG_FIELD_OPTIONAL;
+
+# since these are not explicitly flagged as forbidden in 1.0, we flag them all as optional...
 foreach my $command (keys(%{ $FieldFlags{"1.1"} })) {
     foreach my $field (keys(%{ $FieldFlags{"1.1"}{$command} })) {
-	$FieldFlags{ANY_VERSION()}{$command}{$field} = FLAG_FIELD_OPTIONAL;
+	$FieldFlags{ANY_VERSION()}{$command}{$field} ||= FLAG_FIELD_OPTIONAL;
+    }
+}
+
+#
+# standard STOMP 1.0 or 1.1 fields
+#
+
+foreach my $version (keys(%CommandFlags)) {
+    foreach my $command (keys(%{ $CommandFlags{$version} })) {
+	# any frame can have a content-type header
+	$FieldFlags{$version}{$command}{"content-type"} = FLAG_FIELD_OPTIONAL;
+	# any frame can have a content-length header which must be an integer
+	$FieldFlags{$version}{$command}{"content-length"}
+	    = FLAG_FIELD_OPTIONAL | FLAG_TYPE_LENGTH;
+	# any client frame (except CONNECT and DISCONNECT) can have a receipt header
+	next if ($CommandFlags{$version}{$command} & FLAG_DIRECTION_MASK)
+	    == FLAG_DIRECTION_S2C;
+	next if $command =~ /^(CONNECT|DISCONNECT)$/;
+	$FieldFlags{$version}{$command}{"receipt"} = FLAG_FIELD_OPTIONAL;
     }
 }
 
@@ -181,6 +204,7 @@ foreach my $command (keys(%{ $FieldFlags{"1.1"} })) {
 # STOMP JMS Bindings (http://stomp.codehaus.org/StompJMS)
 #
 
+$FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"selector"} = FLAG_FIELD_OPTIONAL;
 $FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"no-local"} = FLAG_FIELD_OPTIONAL | FLAG_TYPE_BOOLEAN;
 $FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"durable-subscriber-name"} = FLAG_FIELD_OPTIONAL;
 
@@ -228,9 +252,6 @@ foreach my $field (qw(originBrokerId originBrokerName originBrokerURL orignalMes
 
 $FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"exchange"} = FLAG_FIELD_OPTIONAL;
 $FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"routing_key"} = FLAG_FIELD_OPTIONAL;
-foreach my $command (keys(%{ $CommandFlags{ANY_VERSION()} })) {
-    $FieldFlags{ANY_VERSION()}{$command}{"content-type"} = FLAG_FIELD_OPTIONAL;
-}
 
 #
 # other undocumented headers :-(
@@ -240,13 +261,12 @@ $FieldFlags{ANY_VERSION()}{MESSAGE}{"receipt"} = FLAG_FIELD_OPTIONAL;
 $FieldFlags{ANY_VERSION()}{MESSAGE}{"redelivered"} = FLAG_FIELD_OPTIONAL;
 $FieldFlags{ANY_VERSION()}{MESSAGE}{"timestamp"} = FLAG_FIELD_OPTIONAL;
 $FieldFlags{ANY_VERSION()}{MESSAGE}{"JMSXMessageCounter"} = FLAG_FIELD_OPTIONAL;
-$FieldFlags{ANY_VERSION()}{ERROR}{"receipt-id"} = FLAG_FIELD_OPTIONAL;
 
 #
 # additional checking specifications
 #
 
-$CommandCheck{ANY_VERSION()}{UNSUBSCRIBE} = sub ($$$) {
+$CommandCheck{"1.0"}{UNSUBSCRIBE} = sub ($$$) {
     my($command, $headers, $body) = @_;
 
     # either destination or id must be given
@@ -285,4 +305,3 @@ to be used elsewhere.
 Lionel Cons L<http://cern.ch/lionel.cons>
 
 Copyright CERN 2010
-

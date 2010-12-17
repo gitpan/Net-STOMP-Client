@@ -1,5 +1,11 @@
 Revision history for Net-STOMP-Client
 
+0.9.5	Fri Dec 17 2010
+	* Made login and passcode optional in the CONNECT frame.
+	* Net::STOMP::Client->wait_for_frames() now uses a high-res timer.
+	* Added Net::STOMP::Client::Tutorial.
+	* Improved STOMP 1.1 support to match the latest draft specification.
+
 0.9.4	Wed Oct  6 2010
 	* Added STOMP 1.1 support (experimental).
 	* Changed encoding handling in Net::STOMP::Client::Frame to be

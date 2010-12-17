@@ -13,7 +13,7 @@
 package Net::STOMP::Client::Frame;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.32 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.33 $ =~ /(\d+)\.(\d+)/);
 
 #
 # Object Oriented definition
@@ -362,8 +362,8 @@ sub check : method {
 	    $check = $FieldCheck{ANY_VERSION()}{$command}{$key};
 	}
 	unless ($flags) {
-	    # complain only if level high enough and not a message
-	    if ($CheckLevel > 2 and not $command =~ /^(SEND|MESSAGE)$/) {
+	    # complain only if level high enough and not a message or an error
+	    if ($CheckLevel > 2 and not $command =~ /^(SEND|MESSAGE|ERROR)$/) {
 		Net::STOMP::Client::Error::report("%s: unexpected header key for %s: %s",
 						  $me, $command, $key);
 		return();

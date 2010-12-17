@@ -13,7 +13,7 @@
 package Net::STOMP::Client::OO;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.12 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.13 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -36,11 +36,13 @@ sub methods (@) {
 	    unless $name =~ /^_?[a-z]+(_[a-z]+)*$/;
 	# build the accessor method
 	$sub = sub {
-	    my($self, $value) = @_;
-	    die("*** ${class}->${name}(): invalid invocation\n")
-		unless @_ == 1 or @_ == 2;
-	    $self->{$name} = $value if @_ == 2;
-	    return($self->{$name});
+	    if (@_ == 1) {
+		return($_[0]{$name});
+	    } elsif (@_ == 2) {
+		$_[0]{$name} = $_[1];
+		return($_[0]);
+	    }
+	    die("*** ${class}->${name}(): invalid invocation\n");
 	};
 	# hook it to the symbol table
 	no strict "refs";

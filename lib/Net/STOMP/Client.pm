@@ -13,7 +13,7 @@
 package Net::STOMP::Client;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.74 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.77 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -208,7 +208,7 @@ sub _check_version ($$) {
 
     if (defined($version)) {
 	if (ref($version) eq "ARRAY") {
-	    @list = @$version;
+	    @list = sort(@$version);
 	} else {
 	    @list = ($version);
 	}
@@ -400,7 +400,7 @@ sub wait_for_frames : method {
     $callback = $option{callback};
     $timeout = $option{timeout};
     if (defined($timeout)) {
-	$limit = time() + $timeout;
+	$limit = Time::HiRes::time() + $timeout;
 	$timeleft = $timeout;
     }
     while (1) {
@@ -419,12 +419,11 @@ sub wait_for_frames : method {
 		return($frame);
 	    }
 	}
-	# we try to check that at least $timeout seconds have passed
-	# note: this is guaranteed to work only if $timeout is an integer...
+	# we check if we exceeded the timeout
 	if (defined($timeout)) {
-	    $now = time();
-	    return(0) if $now > $limit;
-	    $timeleft = $limit - $now + 1;
+	    $now = Time::HiRes::time();
+	    return(0) if $now >= $limit;
+	    $timeleft = $limit - $now;
 	}
     }
     # not reached...
@@ -751,8 +750,6 @@ sub connect : method {
     }
     # so far so good
     $timeout = delete($option{timeout});
-    $option{login} = "" unless defined($option{login});
-    $option{passcode} = "" unless defined($option{passcode});
     if (grep($_ eq "1.1", @{ $self->_version() })) {
 	# supply additional STOMP 1.1 headers
 	$option{"accept-version"} = join(",", @{ $self->_version() })
@@ -871,18 +868,55 @@ sub send : method {
 
 sub ack : method {
     my($self, %option) = @_;
-    my($frame, $timeout);
+    my($frame, $timeout, $value);
 
     $self->_check_invocation(scalar(@_)) or return();
     $timeout = delete($option{timeout});
-    # the message id can be given via a frame object in %option
+    # we can optionally give a MESSAGE frame here
     if ($option{frame}) {
-	$option{"message-id"} = $option{frame}->header("message-id");
+	# we are careful in case the frame is not a MESSAGE frame...
+	$value = $option{frame}->header("message-id");
+	$option{"message-id"} = $value if defined($value);
+	$value = $option{frame}->header("subscription");
+	$option{"subscription"} = $value if defined($value);
 	delete($option{frame});
     }
     # send an ACK frame
     $frame = Net::STOMP::Client::Frame->new(
 	command => "ACK",
+	headers => \%option,
+    );
+    $self->send_frame($frame, $timeout) or return();
+    return($self);
+}
+
+#
+# acknowledge the rejection of a message
+#
+
+sub nack : method {
+    my($self, %option) = @_;
+    my($frame, $timeout, $value);
+
+    $self->_check_invocation(scalar(@_)) or return();
+    if ($self->version() eq "1.0") {
+	Net::STOMP::Client::Error::report("Net::STOMP::Client->nack(): %s %s",
+					  "not supported for STOMP", $self->version());
+	return();
+    }
+    $timeout = delete($option{timeout});
+    # we can optionally give a MESSAGE frame here
+    if ($option{frame}) {
+	# we are careful in case the frame is not a MESSAGE frame...
+	$value = $option{frame}->header("message-id");
+	$option{"message-id"} = $value if defined($value);
+	$value = $option{frame}->header("subscription");
+	$option{"subscription"} = $value if defined($value);
+	delete($option{frame});
+    }
+    # send an NACK frame
+    $frame = Net::STOMP::Client::Frame->new(
+	command => "NACK",
 	headers => \%option,
     );
     $self->send_frame($frame, $timeout) or return();
@@ -1201,6 +1235,11 @@ send a message somewhere
 
 acknowledge the reception of a message
 
+=item nack()
+
+acknowledge the rejection of a message
+(STOMP 1.1 only)
+
 =item begin()
 
 begin/start a transaction
@@ -1233,7 +1272,11 @@ C<body>: holds the body of the message to be sent
 
 =item ack()
 
-C<frame>: holds the frame object to acknowledge (its message-id will be used)
+C<frame>: holds the MESSAGE frame object to ACK
+
+=item nack()
+
+C<frame>: holds the MESSAGE frame object to NACK
 
 =back
 

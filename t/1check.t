@@ -36,8 +36,6 @@ sub test ($$$$;$) {
 # invalid command
 test(0, "FOOBAR", {}, "");
 
-# missing header
-test(0, "CONNECT", {}, "");
 # missing header for 1.1
 test(0, "CONNECT", { login => "", passcode => "" }, "", "1.1");
 # invalid heart-beat
@@ -47,6 +45,7 @@ test(0, "CONNECT", { login => "", passcode => "", foobar => 123 }, "");
 # unexpected body
 test(0, "CONNECT", { login => "", passcode => "" }, "body");
 # ok
+test(1, "CONNECT", {}, "");
 test(1, "CONNECT", { login => "", passcode => "" }, "");
 test(1, "CONNECT", { login => "", passcode => "", host => "foo", "accept-version" => "1.1" }, "", "1.1");
 test(1, "CONNECT", { login => "", passcode => "", host => "foo", "accept-version" => "1.1", "heart-beat" => "500,0" }, "", "1.1");
