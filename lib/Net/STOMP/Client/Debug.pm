@@ -13,7 +13,7 @@
 package Net::STOMP::Client::Debug;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.11 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.12 $ =~ /(\d+)\.(\d+)/);
 
 #
 # constants
@@ -22,7 +22,8 @@ our $VERSION = sprintf("%d.%02d", q$Revision: 1.11 $ =~ /(\d+)\.(\d+)/);
 use constant API    => 1 << 0;	# STOMP-level API calls
 use constant FRAME  => 1 << 1;	# frames sent and received (command only)
 use constant HEADER => 1 << 2;	# frames sent and received (headers)
-use constant IO     => 1 << 3;	# input/output bytes
+use constant BODY   => 1 << 3;	# frames sent and received (body)
+use constant IO     => 1 << 4;	# input/output bytes
 
 #
 # global variables
@@ -91,6 +92,10 @@ frames sent and received (command only)
 
 frames sent and received (headers)
 
+=item Net::STOMP::Client::Debug::BODY
+
+frames sent and received (body)
+
 =item Net::STOMP::Client::Debug::IO
 
 input/output bytes
@@ -118,4 +123,4 @@ return true if the current debugging flags match the given mask
 
 Lionel Cons L<http://cern.ch/lionel.cons>
 
-Copyright CERN 2010
+Copyright CERN 2010-2011

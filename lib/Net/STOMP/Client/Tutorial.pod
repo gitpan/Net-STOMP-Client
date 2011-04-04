@@ -10,9 +10,9 @@ A basic knowledge of STOMP is required. For this, you can read:
 
 =over
 
-=item * L<http://stomp.codehaus.org/Protocol>
+=item * L<http://stomp.github.com/stomp-specification-1.1.html>
 
-the STOMP protocol specification
+the STOMP 1.1 protocol specification
 
 =item * L<http://fusesource.com/docs/broker/5.4/connectivity_guide/BHIJBDJH.html>
 
@@ -453,4 +453,4 @@ L<Net::STOMP::Client::Peer>.
 
 Lionel Cons L<http://cern.ch/lionel.cons>
 
-Copyright CERN 2010
+Copyright CERN 2010-2011

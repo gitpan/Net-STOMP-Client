@@ -13,7 +13,7 @@
 package Net::STOMP::Client::Protocol;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.8 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.10 $ =~ /(\d+)\.(\d+)/);
 
 #
 # export control
@@ -166,6 +166,7 @@ $FieldFlags{"1.1"}{CONNECT}{"host"}           = FLAG_FIELD_MANDATORY;
 $FieldFlags{"1.1"}{CONNECT}{"heart-beat"}     = FLAG_FIELD_OPTIONAL;
 
 $FieldFlags{"1.1"}{CONNECTED}{"version"}    = FLAG_FIELD_MANDATORY;
+$FieldFlags{"1.1"}{CONNECTED}{"server"}     = FLAG_FIELD_OPTIONAL;
 $FieldFlags{"1.1"}{CONNECTED}{"heart-beat"} = FLAG_FIELD_OPTIONAL;
 
 $FieldFlags{"1.1"}{ACK}{"subscription"} = FLAG_FIELD_MANDATORY;
@@ -192,10 +193,10 @@ foreach my $version (keys(%CommandFlags)) {
 	# any frame can have a content-length header which must be an integer
 	$FieldFlags{$version}{$command}{"content-length"}
 	    = FLAG_FIELD_OPTIONAL | FLAG_TYPE_LENGTH;
-	# any client frame (except CONNECT and DISCONNECT) can have a receipt header
+	# any client frame (except CONNECT) can have a receipt header
 	next if ($CommandFlags{$version}{$command} & FLAG_DIRECTION_MASK)
 	    == FLAG_DIRECTION_S2C;
-	next if $command =~ /^(CONNECT|DISCONNECT)$/;
+	next if $command =~ /^(CONNECT)$/;
 	$FieldFlags{$version}{$command}{"receipt"} = FLAG_FIELD_OPTIONAL;
     }
 }
@@ -304,4 +305,4 @@ to be used elsewhere.
 
 Lionel Cons L<http://cern.ch/lionel.cons>
 
-Copyright CERN 2010
+Copyright CERN 2010-2011

@@ -13,7 +13,7 @@
 package Net::STOMP::Client::Frame;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.33 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.37 $ =~ /(\d+)\.(\d+)/);
 
 #
 # Object Oriented definition
@@ -37,15 +37,21 @@ use Net::STOMP::Client::Protocol qw(:CONSTANTS :VARIABLES);
 #
 
 our(
-    $UTF8Header,     # true if header should be UTF-8 encoded/decoded
-    $BodyEncode,     # true if body encoding/decoding should be dealt with
-    $StrictEncode,   # true if encoding/decoding should be strict
-    $CheckLevel,     # level of checking performed by the check() method
-    $HeaderRegexp,   # regular expression matching a header name
+    $DebugBodyLength, # the maximum length of body that will be printed
+    $UTF8Header,      # true if header should be UTF-8 encoded/decoded
+    $BodyEncode,      # true if body encoding/decoding should be dealt with
+    $StrictEncode,    # true if encoding/decoding should be strict
+    $CheckLevel,      # level of checking performed by the check() method
+    $HeaderRegexp,    # regular expression matching a header name
+    %_EncMap,         # map to backslash-encode some characters in the header
+    %_DecMap,         # map to backslash-decode some characters in the header
 );
 
+$DebugBodyLength = 256;
 $CheckLevel = 2;
 $HeaderRegexp = q{[\w\-\.]+};
+%_EncMap = ("\n" => "\\n", ":" => "\\c", "\\" => "\\\\");
+%_DecMap = reverse(%_EncMap);
 
 #+++############################################################################
 #                                                                              #
@@ -91,6 +97,7 @@ sub _encoding ($) {
 sub _decode ($$) {
     my($string, $version) = @_;
     my($me, $fb, $index, $command, $length, $temp, $headers, $line, $body, $frame);
+    my($key, $value, $errors);
 
     $me = "Net::STOMP::Client::Frame::_decode()";
     $fb = $StrictEncode ? Encode::FB_CROAK : Encode::FB_DEFAULT;
@@ -129,12 +136,20 @@ sub _decode ($$) {
 	    # STOMP 1.1 behavior:
 	    #  - space is significant in the header
 	    #  - "only the first header entry should be used"
+	    #  - handle backslash escaping
 	    foreach $line (split(/\n/, $temp)) {
 		unless ($line =~ /^($HeaderRegexp):(.*)$/o) {
 		    Net::STOMP::Client::Error::report("%s: invalid header: %s", $me, $line);
 		    return();
 		}
-		$headers->{$1} = $2 unless exists($headers->{$1});
+		($key, $value, $errors) = ($1, $2, 0);
+		$key   =~ s/(\\.)/$_DecMap{$1}||$errors++/eg;
+		$value =~ s/(\\.)/$_DecMap{$1}||$errors++/eg;
+		if ($errors) {
+		    Net::STOMP::Client::Error::report("%s: invalid header: %s", $me, $line);
+		    return();
+		}
+		$headers->{$key} = $value unless exists($headers->{$key});
 	    }
 	} else {
 	    # STOMP 1.0 behavior:
@@ -192,7 +207,7 @@ sub _decode ($$) {
 
 sub _encode : method {
     my($self, $version) = @_;
-    my($string, $headers, $body, $fb, $content_length, $key);
+    my($string, $headers, $body, $fb, $content_length, $key, $value);
 
     # setup
     $headers = $self->headers();
@@ -222,9 +237,14 @@ sub _encode : method {
 
     # encode the command and header
     $string = $self->command() . "\n";
-    foreach $key (keys(%$headers)) {
+    while (($key, $value) = each(%$headers)) {
 	next if $key eq "content-length";
-	$string .= $key . ":" . $headers->{$key} . "\n";
+	if ($version and $version eq "1.1") {
+	    # handle backslash escaping
+	    $key   =~ s/([\x0a\x3a\x5c])/$_EncMap{$1}/eg;
+	    $value =~ s/([\x0a\x3a\x5c])/$_EncMap{$1}/eg;
+	}
+	$string .= $key . ":" . $value . "\n";
     }
     if (defined($content_length)) {
 	$string .= "content-length:" . $content_length . "\n";
@@ -245,7 +265,7 @@ sub _encode : method {
 
 sub debug : method {
     my($self, $what) = @_;
-    my($headers, $key);
+    my($headers, $key, $body, $length, $offset, $line, $ascii, $index, $char);
 
     if (Net::STOMP::Client::Debug::enabled(Net::STOMP::Client::Debug::FRAME)) {
 	$what = "seen" unless $what;
@@ -255,10 +275,35 @@ sub debug : method {
 	$headers = $self->headers();
 	$headers = {} unless defined($headers);
 	foreach $key (keys(%$headers)) {
-	    Net::STOMP::Client::Debug::report(-1, "  | %s:%s", $key, $headers->{$key});
+	    Net::STOMP::Client::Debug::report(-1, "  H %s:%s", $key, $headers->{$key});
 	}
     }
-    # FIXME: add the possibility to dump the frame body
+    if (Net::STOMP::Client::Debug::enabled(Net::STOMP::Client::Debug::BODY)) {
+	$body = $self->body();
+	$body = "" unless defined($body);
+	$length = length($body);
+	if ($DebugBodyLength and $length > $DebugBodyLength) {
+	    substr($body, $DebugBodyLength) = "";
+	    $length = $DebugBodyLength;
+	}
+	$offset = 0;
+	while ($length > 0) {
+	    $line = sprintf("%04x", $offset);
+	    $ascii = "";
+	    foreach $index (0 .. 15) {
+		$char = $index < $length ? ord(substr($body, $index, 1)) : undef;
+		$line .= " " if ($index & 3) == 0;
+		$line .= defined($char) ? sprintf("%02x", $char) : "  ";
+		$ascii .= " " if ($index & 3) == 0;
+		$ascii .= defined($char) ?
+		    sprintf("%c", (0x20 <= $char && $char <= 0x7e) ? $char : 0x2e) : " ";
+	    }
+	    Net::STOMP::Client::Debug::report(-1, "  B %s %s", $line, $ascii);
+	    $offset += 16;
+	    $length -= 16;
+	    substr($body, 0, 16) = "";
+	}
+    }
 }
 
 #+++############################################################################
@@ -268,7 +313,7 @@ sub debug : method {
 #---############################################################################
 
 sub check : method {
-    my($self, $version) = @_;
+    my($self, %option) = @_;
     my($me, $command, $headers, $body, $key, $value, $flags, $type, $check);
 
     # setup
@@ -311,8 +356,9 @@ sub check : method {
     return($self) unless $CheckLevel > 1;
 
     # check the command (must be known)
-    if (defined($version)) {
-	$flags = $CommandFlags{$version}{$command} || $CommandFlags{ANY_VERSION()}{$command};
+    if (defined($option{version})) {
+	$flags = $CommandFlags{$option{version}}{$command} ||
+	    $CommandFlags{ANY_VERSION()}{$command};
     } else {
 	$flags = $CommandFlags{ANY_VERSION()}{$command};
     }
@@ -320,7 +366,14 @@ sub check : method {
 	Net::STOMP::Client::Error::report("%s: unknown command: %s", $me, $command);
 	return();
     }
-    # FIXME: check that the command matches the direction using FLAG_DIRECTION_*
+
+    # check that the command matches the direction
+    if ($option{direction}) {
+	unless (($flags & FLAG_DIRECTION_MASK) == $option{direction}) {
+	    Net::STOMP::Client::Error::report("%s: unexpected command: %s", $me, $command);
+	    return();
+	}
+    }
 
     # check the body (must match the expectations)
     $body = $self->body();
@@ -338,7 +391,7 @@ sub check : method {
     }
 
     # check the headers (all required keys must be present)
-    foreach my $v ($version, ANY_VERSION) {
+    foreach my $v ($option{version}, ANY_VERSION) {
 	next unless defined($v) and $FieldFlags{$v} and $FieldFlags{$v}{$command};
 	while (($key, $flags) = each(%{ $FieldFlags{$v}{$command} })) {
 	    next unless ($flags & FLAG_FIELD_MASK) == FLAG_FIELD_MANDATORY;
@@ -352,10 +405,10 @@ sub check : method {
 
     # check the headers (keys must be known, values must match expectations)
     while (($key, $value) = each(%$headers)) {
-	if (defined($version)) {
-	    $flags = $FieldFlags{$version}{$command}{$key} ||
+	if (defined($option{version})) {
+	    $flags = $FieldFlags{$option{version}}{$command}{$key} ||
 		$FieldFlags{ANY_VERSION()}{$command}{$key};
-	    $check = $FieldCheck{$version}{$command}{$key} ||
+	    $check = $FieldCheck{$option{version}}{$command}{$key} ||
 		$FieldCheck{ANY_VERSION()}{$command}{$key};
 	} else {
 	    $flags = $FieldFlags{ANY_VERSION()}{$command}{$key};
@@ -402,8 +455,8 @@ sub check : method {
     }
 
     # additional checks at command level
-    if (defined($version)) {
-	$check = $CommandCheck{$version}{$command} ||
+    if (defined($option{version})) {
+	$check = $CommandCheck{$option{version}}{$command} ||
 	    $CommandCheck{ANY_VERSION()}{$command};
     } else {
 	$check = $CommandCheck{ANY_VERSION()}{$command};
@@ -470,8 +523,9 @@ return the value associated with the given name in the header
 
 =item debug([TAG])
 
-if debugging is enabled, dump a frame object on STDERR (this currently
-excludes the frame body)
+if debugging is enabled, dump a frame object on STDERR; for the body,
+at most $Net::STOMP::Client::Frame::DebugBodyLength bytes will be
+printed
 
 =back
 
@@ -625,4 +679,4 @@ L<Encode>.
 
 Lionel Cons L<http://cern.ch/lionel.cons>
 
-Copyright CERN 2010
+Copyright CERN 2010-2011

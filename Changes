@@ -1,5 +1,13 @@
 Revision history for Net-STOMP-Client
 
+0.9.6	Mon Apr  4 2011
+	* Added headers backslash escaping for STOMP 1.1.
+	* Added some example scripts in the "eg" directory.
+	* Finished STOMP 1.1 support according to final specification.
+	* Improved frame checking.
+	* Added a socket() method giving access to the socket used.
+	* Added support for frame body printing while debugging.
+
 0.9.5	Fri Dec 17 2010
 	* Made login and passcode optional in the CONNECT frame.
 	* Net::STOMP::Client->wait_for_frames() now uses a high-res timer.

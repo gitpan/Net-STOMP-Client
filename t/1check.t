@@ -22,7 +22,7 @@ sub test ($$$$;$) {
 	headers => $headers,
 	body    => $body,
     );
-    $check = $frame->check($version);
+    $check = $frame->check(version => $version);
     $what = $command;
     $what .= " {" . join("+", sort(keys(%$headers))) . "}";
     $what .= " ($version)" if $version;

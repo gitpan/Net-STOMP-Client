@@ -13,7 +13,7 @@
 package Net::STOMP::Client;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.77 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.80 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -27,6 +27,7 @@ use Net::STOMP::Client::Error;
 use Net::STOMP::Client::Frame;
 use Net::STOMP::Client::IO;
 use Net::STOMP::Client::Peer;
+use Net::STOMP::Client::Protocol;
 
 #
 # Object Oriented definition
@@ -335,7 +336,10 @@ sub send_frame : method {
     $timeout = $self->_timeout("send") unless defined($timeout);
     if (ref($frame)) {
 	# always check the sent frame
-	$frame->check($self->version()) or return();
+	$frame->check(
+	    version   => $self->version(),
+	    direction => Net::STOMP::Client::Protocol::FLAG_DIRECTION_C2S,
+	) or return();
 	# keep track of receipts
 	$receipt = $frame->header("receipt");
 	$self->_receipts()->{$receipt}++ if $receipt;
@@ -383,7 +387,10 @@ sub receive_frame : method {
     # update the buffer (which must have changed)
     $self->_io()->_incoming_buffer($buffer);
     # always check the received frame
-    $frame->check($self->version()) or return();
+    $frame->check(
+	version   => $self->version(),
+	direction => Net::STOMP::Client::Protocol::FLAG_DIRECTION_S2C,
+    ) or return();
     # so far so good
     $frame->debug(" received") if $Net::STOMP::Client::Debug::Flags;
     return($frame);
@@ -444,6 +451,16 @@ sub wait_for_receipts : method {
 }
 
 #
+# return the socket used
+#
+
+sub socket : method {
+    my($self) = @_;
+
+    return($self->_io()->_socket());
+}
+
+#
 # return the negotiated protocol version (or undef if not negotiated yet)
 #
 
@@ -453,7 +470,7 @@ sub version : method {
 
     $version = $self->_version();
     return($version) unless ref($version);
-    return();
+    return(undef);
 }
 #
 # return a universal pseudo-unique id to be used in receipts and transactions
@@ -1298,6 +1315,10 @@ return a new Net::STOMP::Client object
 return a Net::STOMP::Client::Peer object containing information about
 the connected STOMP server
 
+=item socket()
+
+return the file handle of the socket connecting the client and the server
+
 =item session()
 
 return the session identifier if connected or undef otherwise
@@ -1539,12 +1560,11 @@ TIMEOUT is undef
 
 =head1 COMPATIBILITY
 
-This module implements the versions C<1.0> and C<1.1> of the protocol
-(see L<http://stomp.codehaus.org/Protocol>) as well as well known
-extensions for JMS, AMQP, ActiveMQ and RabbitMQ.
-
-Note: STOMP C<1.1> support is still experimental as the protocol
-specification is not yet finalized.
+This module implements the versions C<1.0> (see
+L<http://stomp.github.com/stomp-specification-1.0.html>) and C<1.1>
+(see L<http://stomp.github.com/stomp-specification-1.1.html>) of the
+protocol as well as well known extensions for JMS, AMQP, ActiveMQ and
+RabbitMQ.
 
 It has been successfully tested against both ActiveMQ and RabbitMQ
 brokers.
@@ -1562,4 +1582,4 @@ L<Time::HiRes>.
 
 Lionel Cons L<http://cern.ch/lionel.cons>
 
-Copyright CERN 2010
+Copyright CERN 2010-2011

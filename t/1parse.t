@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use Net::STOMP::Client::Error;
 use Net::STOMP::Client::Frame;
-use Test::More tests => 59;
+use Test::More tests => 67;
 use Encode qw();
 
 # errors will not trigger die()
@@ -57,6 +57,9 @@ test("bad headers", EXPECT_ERROR, "FOO\nid=123\n\n\0");
 test("bad headers", EXPECT_ERROR, "FOO\n:123\n\n\0");
 test("bad end-of-frame", EXPECT_ERROR, "FOO\ncontent-length:4\n\nbody\n");
 
+test("no escape (1.0)", EXPECT_COMPLETE, "FOO\nfoo:bar\\gag\n\n\0", "1.0");
+test("bad escape (1.1)", EXPECT_ERROR,   "FOO\nfoo:bar\\gag\n\n\0", "1.1");
+
 my($f, $d, $s, $e);
 
 $d = "FOO\nid: 123 \nid: 456\n\nbody\0";
@@ -93,3 +96,11 @@ is($f->body(), $s, "body (UTF-8 1.1)");
 $d = "FOO\ncontent-type:application/unknown\n\n$e\0";
 $f = Net::STOMP::Client::Frame::_decode($d, "1.1");
 is($f->body(), $e, "body (UTF-8 1.1)");
+
+$d = "FOO\nid:aaa\\\\bbb\\cccc\\nddd\n\nbody\0";
+$f = Net::STOMP::Client::Frame::_decode($d, "1.0");
+is($f->header("id"), "aaa\\\\bbb\\cccc\\nddd", "header (escape 1.0)");
+
+$d = "FOO\nid:aaa\\\\bbb\\cccc\\nddd\n\nbody\0";
+$f = Net::STOMP::Client::Frame::_decode($d, "1.1");
+is($f->header("id"), "aaa\\bbb:ccc\nddd", "header (escape 1.1)");

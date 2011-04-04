@@ -3,6 +3,9 @@ MANIFEST			This list of files
 META.yml			Module meta-data (added by MakeMaker)
 Makefile.PL
 README
+eg/README
+eg/listener
+eg/publisher
 lib/Net/STOMP/Client.pm
 lib/Net/STOMP/Client/Debug.pm
 lib/Net/STOMP/Client/Error.pm
