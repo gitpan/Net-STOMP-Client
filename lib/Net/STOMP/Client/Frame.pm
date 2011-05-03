@@ -13,7 +13,7 @@
 package Net::STOMP::Client::Frame;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.37 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.40 $ =~ /(\d+)\.(\d+)/);
 
 #
 # Object Oriented definition
@@ -42,14 +42,16 @@ our(
     $BodyEncode,      # true if body encoding/decoding should be dealt with
     $StrictEncode,    # true if encoding/decoding should be strict
     $CheckLevel,      # level of checking performed by the check() method
-    $HeaderRegexp,    # regular expression matching a header name
+    $CommandRE,       # regular expression matching a command
+    $HeaderNameRE,    # regular expression matching a header name
     %_EncMap,         # map to backslash-encode some characters in the header
     %_DecMap,         # map to backslash-decode some characters in the header
 );
 
 $DebugBodyLength = 256;
 $CheckLevel = 2;
-$HeaderRegexp = q{[\w\-\.]+};
+$CommandRE = q/[A-Z]{2,16}/;
+$HeaderNameRE = q/[_a-zA-Z0-9\-\.]+/;
 %_EncMap = ("\n" => "\\n", ":" => "\\c", "\\" => "\\\\");
 %_DecMap = reverse(%_EncMap);
 
@@ -113,7 +115,7 @@ sub _decode ($$) {
     # at this point we know we should have at least the command
     # argh! some servers send a spurious newline after the final NULL byte so we
     # may see it at the beginning of the next frame, i.e. here...
-    unless ($string =~ /^([A-Z]{2,16})\n/) {
+    unless ($string =~ /^($CommandRE)\n/o) {
 	Net::STOMP::Client::Error::report("%s: invalid or missing command", $me);
 	return();
     }
@@ -134,11 +136,12 @@ sub _decode ($$) {
 	}
 	if ($version and $version eq "1.1") {
 	    # STOMP 1.1 behavior:
+	    #  - header names and values can contain any OCTET except \n or :
 	    #  - space is significant in the header
 	    #  - "only the first header entry should be used"
 	    #  - handle backslash escaping
 	    foreach $line (split(/\n/, $temp)) {
-		unless ($line =~ /^($HeaderRegexp):(.*)$/o) {
+		unless ($line =~ /^([^:]+):([^:]*)$/o) {
 		    Net::STOMP::Client::Error::report("%s: invalid header: %s", $me, $line);
 		    return();
 		}
@@ -153,10 +156,11 @@ sub _decode ($$) {
 	    }
 	} else {
 	    # STOMP 1.0 behavior:
+	    #  - we arbitrarily restrict the header name as a safeguard
 	    #  - space is not significant in the header
 	    #  - last header wins (not specified explicitly but reasonable default)
 	    foreach $line (split(/\n/, $temp)) {
-		unless ($line =~ /^($HeaderRegexp)\s*:\s*(.*?)\s*$/o) {
+		unless ($line =~ /^($HeaderNameRE)\s*:\s*(.*?)\s*$/o) {
 		    Net::STOMP::Client::Error::report("%s: invalid header: %s", $me, $line);
 		    return();
 		}
@@ -326,7 +330,7 @@ sub check : method {
 	Net::STOMP::Client::Error::report("%s: missing command", $me);
 	return();
     }
-    unless ($command =~ /^[A-Z]{2,16}$/) {
+    unless ($command =~ /^($CommandRE)$/o) {
 	Net::STOMP::Client::Error::report("%s: invalid command: %s", $me, $command);
 	return();
     }
@@ -339,7 +343,8 @@ sub check : method {
 	    return();
 	}
 	foreach $key (keys(%$headers)) {
-	    unless ($key =~ /^($HeaderRegexp)$/o) {
+	    # this is arbitrary but it's used as a safeguard...
+	    unless ($key =~ /^($HeaderNameRE)$/o) {
 		Net::STOMP::Client::Error::report("%s: invalid header key: %s", $me, $key);
 		return();
 	    }
@@ -590,6 +595,38 @@ Encode::FB_CROAK flag instead of the default Encode::FB_DEFAULT.
 
 N.B.: Perl's standard Encode module is used for all encoding/decoding
 operations.
+
+=head1 COMPLIANCE
+
+STOMP 1.0 has several ambiguities and this module does its best to
+work "as expected" in these gray areas.
+
+STOMP 1.1 is much better specified and this module should be fully
+compliant with the STOMP 1.1 specification with two exceptions:
+
+=over
+
+=item invalid encoding
+
+by default, this module is permissive and allows malformed encoded
+data (this is the same default as the Encode module itself); to be
+strict, set $Net::STOMP::Client::Frame::StrictEncode to true (as
+explained above)
+
+=item header keys
+
+by default, this module allows only "reasonable" header keys, made of
+alphanumerical characters (along with C<_>, C<-> and C<.>); to be able
+to use any header key (like the specification allows), set
+$Net::STOMP::Client::Frame::HeaderNameRE to C<q/[\d\D]+/>.
+
+=back
+
+So, to sum up, here is what you can add to your code to get strict
+STOMP 1.1 compliance:
+
+  $Net::STOMP::Client::Frame::StrictEncode = 1;
+  $Net::STOMP::Client::Frame::HeaderNameRE = q/[\d\D]+/;
 
 =head1 FRAME CHECKING
 

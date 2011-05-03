@@ -1,5 +1,9 @@
 Revision history for Net-STOMP-Client
 
+0.9.7	Tue May  3 2011
+	* Fixed spurious test errors.
+	* Documented how to get strict STOMP 1.1 compliance.
+
 0.9.6	Mon Apr  4 2011
 	* Added headers backslash escaping for STOMP 1.1.
 	* Added some example scripts in the "eg" directory.

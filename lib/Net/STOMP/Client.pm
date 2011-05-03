@@ -13,7 +13,7 @@
 package Net::STOMP::Client;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.80 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.81 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -27,7 +27,7 @@ use Net::STOMP::Client::Error;
 use Net::STOMP::Client::Frame;
 use Net::STOMP::Client::IO;
 use Net::STOMP::Client::Peer;
-use Net::STOMP::Client::Protocol;
+use Net::STOMP::Client::Protocol qw(FLAG_DIRECTION_C2S FLAG_DIRECTION_S2C);
 
 #
 # Object Oriented definition
@@ -338,7 +338,7 @@ sub send_frame : method {
 	# always check the sent frame
 	$frame->check(
 	    version   => $self->version(),
-	    direction => Net::STOMP::Client::Protocol::FLAG_DIRECTION_C2S,
+	    direction => FLAG_DIRECTION_C2S,
 	) or return();
 	# keep track of receipts
 	$receipt = $frame->header("receipt");
@@ -389,7 +389,7 @@ sub receive_frame : method {
     # always check the received frame
     $frame->check(
 	version   => $self->version(),
-	direction => Net::STOMP::Client::Protocol::FLAG_DIRECTION_S2C,
+	direction => FLAG_DIRECTION_S2C,
     ) or return();
     # so far so good
     $frame->debug(" received") if $Net::STOMP::Client::Debug::Flags;

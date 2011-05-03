@@ -13,7 +13,7 @@
 package Net::STOMP::Client::Protocol;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.10 $ =~ /(\d+)\.(\d+)/);
+our $VERSION = sprintf("%d.%02d", q$Revision: 1.11 $ =~ /(\d+)\.(\d+)/);
 
 #
 # export control
@@ -155,7 +155,7 @@ $FieldFlags{"1.1"}{MESSAGE}{"subscription"} = FLAG_FIELD_MANDATORY;
 
 $FieldFlags{ANY_VERSION()}{RECEIPT}{"receipt-id"} = FLAG_FIELD_MANDATORY;
 
-$FieldFlags{ANY_VERSION()}{ERROR}{"message"} = FLAG_FIELD_MANDATORY;
+$FieldFlags{ANY_VERSION()}{ERROR}{"message"} = FLAG_FIELD_OPTIONAL;
 
 #
 # STOMP 1.1 extensions
