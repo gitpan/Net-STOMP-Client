@@ -1,4 +1,10 @@
-Revision history for Net-STOMP-Client
+Revision history for Net-STOMP-Client:
+
+1.0	Tue May 10 2011
+	* Promoted to 1.0 after successful testing.
+	* The API is now stable.
+	* The module $VERSION variables now contain the package version
+          (RT#67227).
 
 0.9.7	Tue May  3 2011
 	* Fixed spurious test errors.

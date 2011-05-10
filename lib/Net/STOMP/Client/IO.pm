@@ -13,7 +13,8 @@
 package Net::STOMP::Client::IO;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.19 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.0";
+our $REVISION = sprintf("%d.%02d", q$Revision: 1.20 $ =~ /(\d+)\.(\d+)/);
 
 #
 # Object Oriented definition
@@ -302,4 +303,4 @@ receive data from the socket and put in the internal buffer
 
 Lionel Cons L<http://cern.ch/lionel.cons>
 
-Copyright CERN 2010
+Copyright CERN 2010-2011

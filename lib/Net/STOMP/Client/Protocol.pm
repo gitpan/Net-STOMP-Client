@@ -13,7 +13,8 @@
 package Net::STOMP::Client::Protocol;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.11 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.0";
+our $REVISION = sprintf("%d.%02d", q$Revision: 1.12 $ =~ /(\d+)\.(\d+)/);
 
 #
 # export control

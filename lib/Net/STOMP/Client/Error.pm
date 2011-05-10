@@ -13,7 +13,8 @@
 package Net::STOMP::Client::Error;
 use strict;
 use warnings;
-our $VERSION = sprintf("%d.%02d", q$Revision: 1.8 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.0";
+our $REVISION = sprintf("%d.%02d", q$Revision: 1.9 $ =~ /(\d+)\.(\d+)/);
 
 #
 # global variables
@@ -82,4 +83,4 @@ $Net::STOMP::Client::Error::Die is true, use die() to report the error
 
 Lionel Cons L<http://cern.ch/lionel.cons>
 
-Copyright CERN 2010
+Copyright CERN 2010-2011
