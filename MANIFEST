@@ -17,6 +17,7 @@ lib/Net/STOMP/Client/Peer.pm
 lib/Net/STOMP/Client/Protocol.pm
 lib/Net/STOMP/Client/Tutorial.pod
 t/1check.t
+t/1frame.t
 t/1parse.t
 t/2broker.t
 t/3pod.t

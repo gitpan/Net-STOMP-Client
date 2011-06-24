@@ -13,8 +13,8 @@
 package Net::STOMP::Client::Frame;
 use strict;
 use warnings;
-our $VERSION  = "1.0";
-our $REVISION = sprintf("%d.%02d", q$Revision: 1.41 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.1";
+our $REVISION = sprintf("%d.%02d", q$Revision: 1.44 $ =~ /(\d+)\.(\d+)/);
 
 #
 # Object Oriented definition
@@ -22,7 +22,7 @@ our $REVISION = sprintf("%d.%02d", q$Revision: 1.41 $ =~ /(\d+)\.(\d+)/);
 
 use Net::STOMP::Client::OO;
 our(@ISA) = qw(Net::STOMP::Client::OO);
-Net::STOMP::Client::OO::methods(qw(command headers body));
+Net::STOMP::Client::OO::methods(qw(command headers body_reference));
 
 #
 # used modules
@@ -63,6 +63,46 @@ $HeaderNameRE = q/[_a-zA-Z0-9\-\.]+/;
 #---############################################################################
 
 #
+# constructor
+#
+
+sub new : method {
+    my($class, %option) = @_;
+    my($body);
+
+    if (exists($option{body})) {
+	# body is not a declared attribute but is provided for convenience
+	if (exists($option{body_reference})) {
+	    Net::STOMP::Client::Error::report("%s: %s",
+                "Net::STOMP::Client::Frame->new()",
+		"attributes body and body_reference are mutually exclusive",
+	    );
+	    return();
+	}
+	$body = delete($option{body});
+	$option{body_reference} = \$body;
+    }
+    return($class->SUPER::new(%option));
+}
+
+#
+# accessor for the body
+#
+
+sub body : method {
+    my($self, $body) = @_;
+
+    unless (defined($body)) {
+	# get
+	return(undef) unless $self->{body_reference};
+	return(${ $self->{body_reference} });
+    }
+    # set
+    $self->{body_reference} = \$body;
+    return($self);
+}
+
+#
 # convenient header access method (get only)
 #
 
@@ -89,7 +129,89 @@ sub _encoding ($) {
 }
 
 #
-# decode the given string and return a complete frame object, if possible
+# parse the given string reference and return a hash of pointers to frame parts
+#
+# return true on complete frame, 0 on incomplete and undef on error
+#
+
+sub _parse ($%) {
+    my($bufref, %option) = @_;
+    my($me, $state, $index);
+
+    $me = "Net::STOMP::Client::Frame::_parse()";
+    $state = $option{state} || {};
+    #
+    # before: allow 0 or more newline characters
+    #
+    unless (exists($state->{before_len})) {
+	return(0) unless $$bufref =~ /^\n*[^\n]/g;
+	$state->{before_len} = pos($$bufref) - 1;
+    }
+    #
+    # command: everything up to the first newline character
+    #
+    unless (exists($state->{command_len})) {
+	$state->{command_idx} = $state->{before_len};
+	$index = index($$bufref, "\n", $state->{command_idx});
+	return(0) if $index < 0;
+	$state->{command_len} = $index - $state->{command_idx};
+    }
+    #
+    # header: everything up to the first double newline characters
+    #
+    unless (exists($state->{header_len})) {
+	$state->{header_idx} = $state->{command_idx} + $state->{command_len};
+	$index = index($$bufref, "\n\n", $state->{header_idx});
+	return(0) if $index < 0;
+	if ($index == $state->{header_idx}) {
+	    # empty header
+	    $state->{header_len} = 0;
+	} else {
+	    # non-empty header
+	    $state->{header_idx}++;
+	    $state->{header_len} = $index - $state->{header_idx};
+	    $state->{content_length} = $1
+		if substr($$bufref, $state->{header_idx}-1, $state->{header_len}+2)
+		    =~ /\ncontent-length *: *(\d+)\n/;
+	}
+    }
+    #
+    # body: everything up to content-length bytes or the first NULL byte
+    #
+    unless (exists($state->{body_len})) {
+	$state->{body_idx} = $state->{header_idx} + $state->{header_len} + 2;
+	if (exists($state->{content_length})) {
+	    # length is known
+	    return(0) if length($$bufref) < $state->{body_idx} + $state->{content_length} + 1;
+	    $state->{body_len} = $state->{content_length};
+	    unless (substr($$bufref, $state->{body_idx} + $state->{body_len}, 1) eq "\0") {
+		Net::STOMP::Client::Error::report("%s: missing NULL at end of frame", $me);
+		return();
+	    }
+	} else {
+	    # length is not known
+	    $index = index($$bufref, "\0", $state->{body_idx});
+	    return(0) if $index < 0;
+	    $state->{body_len} = $index - $state->{body_idx};
+	}
+    }
+    #
+    # after: take into account an optional single spurious newline character
+    #
+    $state->{after_idx} = $state->{body_idx} + $state->{body_len} + 1;
+    if (length($$bufref) > $state->{after_idx} and
+	substr($$bufref, $state->{after_idx}, 1) eq "\n") {
+	$state->{after_len} = 1;
+    } else {
+	$state->{after_len} = 0;
+    }
+    $state->{total_len} = $state->{after_idx} + $state->{after_len};
+    # so far so good ;-)
+    return($state);
+}
+
+#
+# decode the given string reference and return a complete frame object, if possible
 #
 # side effect: in case a frame is successfully found, the given string is
 # _modified_ to remove the corresponding encoded frame
@@ -97,45 +219,48 @@ sub _encoding ($) {
 # return zero if no complete frame is found and undef on error
 #
 
-sub _decode ($$) {
-    my($string, $version) = @_;
-    my($me, $fb, $index, $command, $length, $temp, $headers, $line, $body, $frame);
-    my($key, $value, $errors);
+sub _decode ($%) {
+    my($bufref, %option) = @_;
+    my($me, $state, $fb, $v1_1, $temp, $frame, $headers, $key, $value, $errors, $line);
 
+    #
+    # setup
+    #
     $me = "Net::STOMP::Client::Frame::_decode()";
+    $state = $option{state} || {};
     $fb = $StrictEncode ? Encode::FB_CROAK : Encode::FB_DEFAULT;
-    # newlines are accepted by STOMP as "line noise" to be ignored outside frames
-    if ($string =~ /^(\n+)/) {
-	# we strip leading newlines
-	substr($_[0], 0, length($1)) = "";
-	$string = $_[0];
+    $v1_1 = 1 if $option{version} and $option{version} eq "1.1";
+    #
+    # frame parsing
+    #
+    $temp = _parse($bufref, state => $state);
+    return() unless defined($temp);
+    unless ($temp) {
+	# incomplete: we trim the leading newlines anyway...
+	%$state = () if $$bufref =~ s/^\n+//;
+	return(0);
     }
-    # look for command
-    $index = index($string, "\n", 1);
-    return(0) unless $index >= 0;
-    # at this point we know we should have at least the command
-    # argh! some servers send a spurious newline after the final NULL byte so we
-    # may see it at the beginning of the next frame, i.e. here...
-    unless ($string =~ /^($CommandRE)\n/o) {
-	Net::STOMP::Client::Error::report("%s: invalid or missing command", $me);
+    $frame = Net::STOMP::Client::Frame->new();
+    #
+    # command
+    #
+    $temp = substr($$bufref, $state->{command_idx}, $state->{command_len});
+    unless ($temp =~ /^($CommandRE)$/o) {
+	Net::STOMP::Client::Error::report("%s: invalid command", $me);
 	return();
     }
-    $command = $1;
-    $length = length($command);
-
-    # look for headers
-    $index = index($string, "\n\n", $length);
-    return(0) unless $index >= 0;
-    # at this point we know we should have at least the headers
+    $frame->command($temp);
+    #
+    # headers
+    #
     $headers = {};
-    if ($index > $length) {
-	$temp = substr($string, $length + 1, $index - $length - 1);
+    $temp = substr($$bufref, $state->{header_idx}, $state->{header_len});
+    if (length($temp)) {
 	# optionally handle UTF-8 header decoding
-	if ($UTF8Header or
-	    (not defined($UTF8Header) and defined($version) and $version eq "1.1")) {
+	if ($UTF8Header or (not defined($UTF8Header) and $v1_1)) {
 	    $temp = Encode::decode("UTF-8", $temp, $fb);
 	}
-	if ($version and $version eq "1.1") {
+	if ($v1_1) {
 	    # STOMP 1.1 behavior:
 	    #  - header names and values can contain any OCTET except \n or :
 	    #  - space is significant in the header
@@ -169,52 +294,35 @@ sub _decode ($$) {
 	    }
 	}
     }
-
-    # look for body
-    $length = $headers->{"content-length"};
-    if (defined($length) and $length =~ /^\d+$/) {
-	return(0) unless length($string) >= $index + $length + 3;
-	unless (substr($string, $index+2+$length, 1) eq "\0") {
-	    Net::STOMP::Client::Error::report("%s: missing NULL byte", $me);
-	    return();
-	}
-    } else {
-	$length = index($string, "\0", $index + 2) - $index - 2;
-	return(0) unless $length >= 0;
-    }
-    # at this point we know we should have at least the body
-    $body = substr($string, $index + 2, $length);
-
+    $frame->headers($headers);
+    #
+    # body
+    #
+    $temp = substr($$bufref, $state->{body_idx}, $state->{body_len});
     # optionally handle body decoding
-    if ($BodyEncode or
-	(not defined($BodyEncode) and defined($version) and $version eq "1.1")) {
-	$temp = _encoding($headers->{"content-type"});
-	$body = Encode::decode($temp, $body, $fb) if $temp;
+    if ($BodyEncode or (not defined($BodyEncode) and $v1_1)) {
+	$value = _encoding($headers->{"content-type"});
+	$temp = Encode::decode($value, $temp, $fb) if $value;
     }
-
-    # build the frame and truncate the given string
-    $frame = Net::STOMP::Client::Frame->new(
-        command => $command,
-	headers => $headers,
-	body    => $body,
-    );
-    substr($_[0], 0, $index + $length + 3) = "";
-    # we check immediately for a spurious trailing newline...
-    substr($_[0], 0, 1) = "" if length($_[0]) and substr($_[0], 0, 1) eq "\n";
-
-    # so far so good ;-)
+    $frame->body_reference(\$temp);
+    #
+    # update buffer and state
+    #
+    substr($$bufref, 0, $state->{total_len}) = "";
+    %$state = ();
     return($frame);
 }
 
 #
-# encode the given frame object
+# encode the given frame object and return a string reference
 #
 
 sub _encode : method {
-    my($self, $version) = @_;
-    my($string, $headers, $body, $fb, $content_length, $key, $value);
+    my($self, %option) = @_;
+    my($v1_1, $string, $headers, $body, $fb, $content_length, $key, $value);
 
     # setup
+    $v1_1 = 1 if $option{version} and $option{version} eq "1.1";
     $headers = $self->headers();
     $headers = {} unless defined($headers);
     $body = $self->body();
@@ -222,8 +330,7 @@ sub _encode : method {
     $fb = $StrictEncode ? Encode::FB_CROAK : Encode::FB_DEFAULT;
 
     # optionally handle body encoding (before content-length handling)
-    if ($BodyEncode or
-	(not defined($BodyEncode) and defined($version) and $version eq "1.1")) {
+    if ($BodyEncode or (not defined($BodyEncode) and $v1_1)) {
 	$string = _encoding($headers->{"content-type"});
 	$body = Encode::encode($string, $body, $fb) if $string;
     }
@@ -244,7 +351,7 @@ sub _encode : method {
     $string = $self->command() . "\n";
     while (($key, $value) = each(%$headers)) {
 	next if $key eq "content-length";
-	if ($version and $version eq "1.1") {
+	if ($v1_1) {
 	    # handle backslash escaping
 	    $key   =~ s/([\x0a\x3a\x5c])/$_EncMap{$1}/eg;
 	    $value =~ s/([\x0a\x3a\x5c])/$_EncMap{$1}/eg;
@@ -254,14 +361,19 @@ sub _encode : method {
     if (defined($content_length)) {
 	$string .= "content-length:" . $content_length . "\n";
     }
+    $string .= "\n";
 
     # optionally handle UTF-8 header encoding
-    if ($UTF8Header or
-	(not defined($UTF8Header) and defined($version) and $version eq "1.1")) {
+    if ($UTF8Header or (not defined($UTF8Header) and $v1_1)) {
 	$string = Encode::encode("UTF-8", $string, $fb);
     }
 
-    return("$string\n$body\0");
+    # append the body and final NULL character
+    $string .= $body;
+    $string .= "\0";
+
+    # return a reference to the encoded frame
+    return(\$string);
 }
 
 #
@@ -511,7 +623,8 @@ This module provides an object oriented interface to manipulate STOMP frames.
 
 A frame object has the following attributes: C<command>, C<headers>
 and C<body>. The C<headers> must be a reference to a hash of header
-key/value pairs.
+key/value pairs. See L<Net::STOMP::Client::OO> for more information on
+the object oriented interface itself.
 
 =head1 FUNCTIONS
 
@@ -519,13 +632,34 @@ This module provides the following methods:
 
 =over
 
-=item check()
+=item new([OPTIONS])
 
-check that the frame is well-formed, see below for more information
+return a new Net::STOMP::Client::Frame object (class method)
+
+=item command([STRING])
+
+get/set the command attribute
+
+=item headers([HASHREF])
+
+get/set the headers attribute
 
 =item header(NAME)
 
 return the value associated with the given name in the header
+
+=item body([STRING])
+
+get/set the body attribute
+
+=item body_reference([STRINGREF])
+
+get/set the reference to the body attribute (useful to avoid string
+copies when manipulating large bodies)
+
+=item check()
+
+check that the frame is well-formed, see below for more information
 
 =item debug([TAG])
 
@@ -711,6 +845,7 @@ method.
 =head1 SEE ALSO
 
 L<Net::STOMP::Client::Debug>,
+L<Net::STOMP::Client::OO>,
 L<Encode>.
 
 =head1 AUTHOR

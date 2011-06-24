@@ -439,6 +439,31 @@ Net::STOMP::Client will extract the C<message-id> for you:
 Messages that have not be acknowledged by the end of the session will be
 resent by the broker.
 
+=head2 EFFICIENT I/O
+
+The high-level methods handle one frame at a time. This can be
+inefficient for small frames. For instance, the C<send> method will
+build a frame object, encode it and send it on the wire with at least
+one call to C<syswrite>, maybe for very few bytes.
+
+The low-level methods allow you to better control this and queue
+messages in memory before sending them. This way, you group data and
+use I/O more efficiently.
+
+Here is how to queue ten messages and send them in one go.
+
+  foreach $n (1 .. 10) {
+      $frame = Net::STOMP::Client::Frame->new(
+          command => "SEND",
+          headers => { destination => "/topic/test" },
+          body    => "message $n",
+      );
+      # simply add the frame to the outgoing queue
+      $stomp->queue_frame($frame);
+  }
+  # no timeout given: block until all data has been sent
+  $stomp->send_data();
+
 =head1 SEE ALSO
 
 L<IO::Socket::SSL>,

@@ -1,5 +1,14 @@
 Revision history for Net-STOMP-Client:
 
+1.1	Fri Jun 24 2011
+	* Net::STOMP::Client::Frame: added a body_reference() method
+	  to avoid string copies when manipulating large bodies.
+	* Greatly improved the overall performance (~4 times faster),
+	  mainly by reducing string copies, improving frame parsing
+	  and minimizing syscalls in the I/O layer.
+	* Added several methods to Net::STOMP::Client to get better
+	  performance, see the "EFFICIENT I/O" section of the tutorial.
+
 1.0	Tue May 10 2011
 	* Promoted to 1.0 after successful testing.
 	* The API is now stable.

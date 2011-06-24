@@ -13,14 +13,16 @@
 package Net::STOMP::Client::OO;
 use strict;
 use warnings;
-our $VERSION  = "1.0";
-our $REVISION = sprintf("%d.%02d", q$Revision: 1.14 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.1";
+our $REVISION = sprintf("%d.%02d", q$Revision: 1.15 $ =~ /(\d+)\.(\d+)/);
 
 #
-# used modules
+# global variables
 #
 
-use UNIVERSAL qw();
+our(
+    %_Declared,			# hash of the declared classes and methods
+);
 
 #
 # declare the valid fields/methods that the derived class supports
@@ -35,6 +37,8 @@ sub methods (@) {
 	# check the method name
 	die("*** invalid method name: $name\n")
 	    unless $name =~ /^_?[a-z]+(_[a-z]+)*$/;
+	# record it
+	$_Declared{$class}{$name}++;
 	# build the accessor method
 	$sub = sub {
 	    if (@_ == 1) {
@@ -63,7 +67,7 @@ sub new : method {
 	unless @_ % 2;
     foreach $key (keys(%data)) {
 	die("*** ${class}->new(): unexpected method: $key\n")
-	    unless $key =~ /^_?[a-z]+(_[a-z]+)*$/ and UNIVERSAL::can($class, $key);
+	    unless $key =~ /^_?[a-z]+(_[a-z]+)*$/ and $_Declared{$class}{$key};
     }
     $self = \%data;
     bless($self, $class);

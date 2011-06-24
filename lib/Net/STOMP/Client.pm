@@ -13,8 +13,8 @@
 package Net::STOMP::Client;
 use strict;
 use warnings;
-our $VERSION  = "1.0";
-our $REVISION = sprintf("%d.%02d", q$Revision: 1.82 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.1";
+our $REVISION = sprintf("%d.%02d", q$Revision: 1.85 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -74,6 +74,7 @@ sub _timeout : method {
 		connect   => $timeout,
 		connected => $timeout,
 		send      => undef,
+		receive   => undef,
 	    };
 	}
     } else {
@@ -82,9 +83,10 @@ sub _timeout : method {
 	    connect   => undef,
 	    connected => 10,
 	    send      => undef,
+	    receive   => undef,
 	};
     }
-    unless ($operation =~ /^(connect|connected|send)$/) {
+    unless ($operation =~ /^(connect|connected|receive|send)$/) {
 	Net::STOMP::Client::Error::repor("%s: unexpected timeout operation: %s",
 					 "Net::STOMP::Client", $operation);
 	return();
@@ -320,39 +322,114 @@ sub new : method {
 }
 
 #
-# try to send one frame (the frame is always checked, this is currently a feature)
+# expose the incoming buffer reference
 #
-# if the frame has a "receipt" header, its value will be remembered to be used
+
+sub incoming_buffer_reference : method {
+    my($self) = @_;
+
+    return($self->_io()->incoming_buffer_reference());
+}
+
+#
+# expose the outgoing buffer length
+#
+
+sub outgoing_buffer_length : method {
+    my($self) = @_;
+
+    return($self->_io()->outgoing_buffer_length());
+}
+
+#
+# queue the given frame (the frame is always checked, this is currently a feature)
+#
+# if the frame has a "receipt" header, its value will be remembered, to be used
 # later in _default_receipt_callback() and/or wait_for_receipts()
 #
 
-sub send_frame : method {
-    my($self, $frame, $timeout) = @_;
-    my($done, $receipt);
+sub queue_frame : method {
+    my($self, $frame) = @_;
+    my($version, $data, $receipt);
 
-    # check that the object is usable
-    Net::STOMP::Client::Error::report("lost connection")
-	unless $self->_io();
-    # handle global send timeout
-    $timeout = $self->_timeout("send") unless defined($timeout);
     if (ref($frame)) {
-	# always check the sent frame
+	# always check the sent frame if it's a real one
+	$version = $self->version();
 	$frame->check(
-	    version   => $self->version(),
+	    version   => $version,
 	    direction => FLAG_DIRECTION_C2S,
 	) or return();
 	# keep track of receipts
 	$receipt = $frame->header("receipt");
 	$self->_receipts()->{$receipt}++ if $receipt;
-	# encode the frame and send it
+	# encode the frame
 	$frame->debug(" sending") if $Net::STOMP::Client::Debug::Flags;
-	$done = $self->_io()->send_data($frame->_encode($self->version()), $timeout);
+	$data = $frame->_encode(version => $version);
     } else {
-	# handle the special NOOP frame
-	$done = $self->_io()->send_data($frame, $timeout);
+	# handle the special NOOP frame (= newline) or an already encoded frame
+	$data = \$frame;
     }
-    return($done) unless $done;
-    return($frame);
+    # queue what we have
+    return($self->_io()->queue_data($data));
+}
+
+#
+# send queued data
+#
+
+sub send_data : method {
+    my($self, $timeout) = @_;
+
+    # check that the I/O object is still usable
+    Net::STOMP::Client::Error::report(
+	"Net::STOMP::Client->send_data(): lost connection"
+    ) unless $self->_io();
+    # handle the global send timeout
+    $timeout = $self->_timeout("send") unless defined($timeout);
+    # just do it
+    return($self->_io()->send_data($timeout));
+}
+
+#
+# send the given frame (i.e. queue and then send _all_ data)
+#
+
+sub send_frame : method {
+    my($self, $frame, $timeout) = @_;
+    my($result);
+
+    # queue the frame
+    $result = $self->queue_frame($frame);
+    return() unless defined($result);
+    # send queued data
+    $result = $self->send_data($timeout);
+    return() unless defined($result);
+    # make sure we sent _all_ data
+    if ($self->_io()->outgoing_buffer_length()) {
+	Net::STOMP::Client::Error::report(
+	    "Net::STOMP::Client->send_frame(): could not send all data!"
+	);
+	return();
+    }
+    # so far so good...
+    return($result);
+}
+
+#
+# receive data
+#
+
+sub receive_data : method {
+    my($self, $timeout) = @_;
+
+    # check that the I/O object is still usable
+    Net::STOMP::Client::Error::report(
+	"Net::STOMP::Client->receive_data(): lost connection"
+    ) unless $self->_io();
+    # handle the global receive timeout
+    $timeout = $self->_timeout("receive") unless defined($timeout);
+    # just do it
+    return($self->_io()->receive_data($timeout));
 }
 
 #
@@ -361,35 +438,46 @@ sub send_frame : method {
 
 sub receive_frame : method {
     my($self, $timeout) = @_;
-    my($version, $buffer, $done, $frame);
+    my($maxtime, $version, $bufref, $state, $frame, $result, $remaining);
 
-    # check that the object is usable
-    Net::STOMP::Client::Error::report("lost connection")
-	unless $self->_io();
-    # first try to use the current buffer
+    # keep track of time
+    $timeout = $self->_timeout("receive") unless defined($timeout);
+    $maxtime = Time::HiRes::time() + $timeout if defined($timeout);
+    # first try to use the incoming buffer
     $version = $self->version();
-    $buffer = $self->_io()->_incoming_buffer();
-    $frame = Net::STOMP::Client::Frame::_decode($buffer, $version);
+    $bufref = $self->_io()->incoming_buffer_reference();
+    $state = {};
+    $frame = Net::STOMP::Client::Frame::_decode($bufref,
+        version => $version,
+	state   => $state,
+    );
     return() unless defined($frame);
-    unless ($frame) {
-	# not enough data in buffer for a complete frame
-	$done = $self->_io()->receive_data($timeout);
-	return($done) unless $done;
-	$buffer = $self->_io()->_incoming_buffer();
-	# try once more with new buffer
-	$frame = Net::STOMP::Client::Frame::_decode($buffer, $version);
-	return() unless defined($frame);
-	unless ($frame) {
-	    # update the buffer (which may have changed)
-	    $self->_io()->_incoming_buffer($buffer);
-	    return(0);
+    # if this fails, try to receive data until we are done
+    while (not $frame) {
+	# where are we with time?
+	if (not defined($timeout)) {
+	    # timeout = undef => blocking
+	} elsif ($timeout) {
+	    # timeout > 0 => try once more if not too late
+	    $remaining = $maxtime - Time::HiRes::time();
+	    return(0) if $remaining <= 0;
+	    $timeout = $remaining;
+	} else {
+	    # timeout = 0 => non-blocking
 	}
+	# receive more data
+	$result = $self->receive_data($timeout);
+	return($result) unless $result;
+	# do we have a complete frame now?
+	$frame = Net::STOMP::Client::Frame::_decode($bufref,
+	    version => $version,
+	    state   => $state,
+	);
+	return() unless defined($frame);
     }
-    # update the buffer (which must have changed)
-    $self->_io()->_incoming_buffer($buffer);
     # always check the received frame
     $frame->check(
-	version   => $self->version(),
+	version   => $version,
 	direction => FLAG_DIRECTION_S2C,
     ) or return();
     # so far so good
@@ -1209,6 +1297,10 @@ L<IO::Socket::INET> or L<IO::Socket::SSL> object (default: none)
 timeout used while waiting for the initial CONNECTED frame from the
 broker (default: 10)
 
+=item receive
+
+timeout used while trying to receive any frame (default: none)
+
 =item send
 
 timeout used while trying to send any frame (default: none)
@@ -1549,15 +1641,38 @@ dispatch one received frame by calling the appropriate callback
 
 =item $stomp->send_frame(FRAME, TIMEOUT)
 
-try to send the given frame object within the given TIMEOUT, or
-forever if the TIMEOUT is undef
+try to send the given frame object within the given TIMEOUT
+
+=item $stomp->queue_frame(FRAME)
+
+add the given frame to the outgoing buffer queue
+
+=item $stomp->send_data(TIMEOUT)
+
+send all the queued data within the given TIMEOUT
 
 =item $stomp->receive_frame(TIMEOUT)
 
-try to receive a frame within the given TIMEOUT, or forever if the
-TIMEOUT is undef
+try to receive a frame within the given TIMEOUT
+
+=item $stomp->receive_data(TIMEOUT)
+
+try to receive data within the given TIMEOUT, this data will be
+appended to the incoming buffer
+
+=item $stomp->outgoing_buffer_length()
+
+return the length (in bytes) of the outgoing buffer
+
+=item $stomp->incoming_buffer_reference()
+
+return a reference to the incoming buffer
 
 =back
+
+In these methods, the TIMEOUT argument can either be C<undef> (meaning
+block until it's done) or C<0> (meaning do not block at all) or a
+positive number (meaning block at most this number of seconds).
 
 =head1 COMPATIBILITY
 
