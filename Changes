@@ -1,5 +1,12 @@
 Revision history for Net-STOMP-Client:
 
+1.1_1	Tue Aug 23 2011 (developer release - for testing purposes only)
+	* Net::STOMP::Client::Frame: the frame parsing, decoding and encoding
+	  code is now documented and can be used outside of this module.
+	* Improved frame debugging to really show what has been sent/received.
+	* Net::STOMP::Client::Frame: removed the debug() method.
+	* Fixed typo (RT#69417).
+
 1.1	Fri Jun 24 2011
 	* Net::STOMP::Client::Frame: added a body_reference() method
 	  to avoid string copies when manipulating large bodies.

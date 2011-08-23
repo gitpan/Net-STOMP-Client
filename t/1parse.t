@@ -20,7 +20,7 @@ sub test ($$$;$) {
 
     ($strip = $data) =~ s/^\n+//;
     $Net::STOMP::Client::Error::Message = "";
-    $frame = Net::STOMP::Client::Frame::_decode(\$data, version => $version);
+    $frame = Net::STOMP::Client::Frame::decode(\$data, version => $version);
     if ($expect == EXPECT_ERROR) {
 	ok(!defined($frame), "$name (frame)");
 	ok(length($Net::STOMP::Client::Error::Message), "$name (error)");
@@ -63,13 +63,13 @@ test("bad escape (1.1)", EXPECT_ERROR,   "FOO\nfoo:bar\\gag\n\n\0", "1.1");
 my($f, $d, $s, $e);
 
 $d = "FOO\nid: 123 \nid: 456\n\nbody\0";
-$f = Net::STOMP::Client::Frame::_decode(\$d, version => "1.0");
+$f = Net::STOMP::Client::Frame::decode(\$d, version => "1.0");
 is($f->command(), "FOO", "command (1.0)");
 is($f->header("id"), "456", "header (1.0)");
 is($f->body(), "body", "body (1.0)");
 
 $d = "FOO\nid: 123 \nid: 456\n\nbody\0";
-$f = Net::STOMP::Client::Frame::_decode(\$d, version => "1.1");
+$f = Net::STOMP::Client::Frame::decode(\$d, version => "1.1");
 is($f->command(), "FOO", "command (1.1)");
 is($f->header("id"), " 123 ", "header (1.1)");
 is($f->body(), "body", "body (1.1)");
@@ -78,29 +78,29 @@ $s = "Théâtre Français";
 $e = Encode::encode("UTF-8", $d=$s, Encode::FB_CROAK);
 
 $d = "FOO\nid:$e\n\nbody\0";
-$f = Net::STOMP::Client::Frame::_decode(\$d, version => "1.0");
+$f = Net::STOMP::Client::Frame::decode(\$d, version => "1.0");
 is($f->header("id"), $e, "header (UTF-8 1.0)");
 
 $d = "FOO\nid:$e\n\nbody\0";
-$f = Net::STOMP::Client::Frame::_decode(\$d, version => "1.1");
+$f = Net::STOMP::Client::Frame::decode(\$d, version => "1.1");
 is($f->header("id"), $s, "header (UTF-8 1.1)");
 
 $d = "FOO\ncontent-type:text/plain\n\n$e\0";
-$f = Net::STOMP::Client::Frame::_decode(\$d, version => "1.0");
+$f = Net::STOMP::Client::Frame::decode(\$d, version => "1.0");
 is($f->body(), $e, "body (UTF-8 1.0)");
 
 $d = "FOO\ncontent-type:text/plain\n\n$e\0";
-$f = Net::STOMP::Client::Frame::_decode(\$d, version => "1.1");
+$f = Net::STOMP::Client::Frame::decode(\$d, version => "1.1");
 is($f->body(), $s, "body (UTF-8 1.1)");
 
 $d = "FOO\ncontent-type:application/unknown\n\n$e\0";
-$f = Net::STOMP::Client::Frame::_decode(\$d, version => "1.1");
+$f = Net::STOMP::Client::Frame::decode(\$d, version => "1.1");
 is($f->body(), $e, "body (UTF-8 1.1)");
 
 $d = "FOO\nid:aaa\\\\bbb\\cccc\\nddd\n\nbody\0";
-$f = Net::STOMP::Client::Frame::_decode(\$d, version => "1.0");
+$f = Net::STOMP::Client::Frame::decode(\$d, version => "1.0");
 is($f->header("id"), "aaa\\\\bbb\\cccc\\nddd", "header (escape 1.0)");
 
 $d = "FOO\nid:aaa\\\\bbb\\cccc\\nddd\n\nbody\0";
-$f = Net::STOMP::Client::Frame::_decode(\$d, version => "1.1");
+$f = Net::STOMP::Client::Frame::decode(\$d, version => "1.1");
 is($f->header("id"), "aaa\\bbb:ccc\nddd", "header (escape 1.1)");

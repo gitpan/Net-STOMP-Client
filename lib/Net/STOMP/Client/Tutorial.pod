@@ -439,6 +439,9 @@ Net::STOMP::Client will extract the C<message-id> for you:
 Messages that have not be acknowledged by the end of the session will be
 resent by the broker.
 
+Note that STOMP 1.1 also has a C<client-individual> mode. Please
+consult the protocol specification for more details.
+
 =head2 EFFICIENT I/O
 
 The high-level methods handle one frame at a time. This can be

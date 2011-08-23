@@ -13,8 +13,8 @@
 package Net::STOMP::Client;
 use strict;
 use warnings;
-our $VERSION  = "1.1";
-our $REVISION = sprintf("%d.%02d", q$Revision: 1.85 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.1_1";
+our $REVISION = sprintf("%d.%02d", q$Revision: 1.88 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -87,8 +87,8 @@ sub _timeout : method {
 	};
     }
     unless ($operation =~ /^(connect|connected|receive|send)$/) {
-	Net::STOMP::Client::Error::repor("%s: unexpected timeout operation: %s",
-					 "Net::STOMP::Client", $operation);
+	Net::STOMP::Client::Error::report("%s: unexpected timeout operation: %s",
+					  "Net::STOMP::Client", $operation);
 	return();
     }
     return($timeout->{$operation});
@@ -363,8 +363,7 @@ sub queue_frame : method {
 	$receipt = $frame->header("receipt");
 	$self->_receipts()->{$receipt}++ if $receipt;
 	# encode the frame
-	$frame->debug(" sending") if $Net::STOMP::Client::Debug::Flags;
-	$data = $frame->_encode(version => $version);
+	$data = $frame->encode(version => $version);
     } else {
 	# handle the special NOOP frame (= newline) or an already encoded frame
 	$data = \$frame;
@@ -447,7 +446,7 @@ sub receive_frame : method {
     $version = $self->version();
     $bufref = $self->_io()->incoming_buffer_reference();
     $state = {};
-    $frame = Net::STOMP::Client::Frame::_decode($bufref,
+    $frame = Net::STOMP::Client::Frame::decode($bufref,
         version => $version,
 	state   => $state,
     );
@@ -469,7 +468,7 @@ sub receive_frame : method {
 	$result = $self->receive_data($timeout);
 	return($result) unless $result;
 	# do we have a complete frame now?
-	$frame = Net::STOMP::Client::Frame::_decode($bufref,
+	$frame = Net::STOMP::Client::Frame::decode($bufref,
 	    version => $version,
 	    state   => $state,
 	);
@@ -481,7 +480,6 @@ sub receive_frame : method {
 	direction => FLAG_DIRECTION_S2C,
     ) or return();
     # so far so good
-    $frame->debug(" received") if $Net::STOMP::Client::Debug::Flags;
     return($frame);
 }
 

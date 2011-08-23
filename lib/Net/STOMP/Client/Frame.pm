@@ -13,8 +13,8 @@
 package Net::STOMP::Client::Frame;
 use strict;
 use warnings;
-our $VERSION  = "1.1";
-our $REVISION = sprintf("%d.%02d", q$Revision: 1.44 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.1_1";
+our $REVISION = sprintf("%d.%02d", q$Revision: 1.48 $ =~ /(\d+)\.(\d+)/);
 
 #
 # Object Oriented definition
@@ -134,11 +134,11 @@ sub _encoding ($) {
 # return true on complete frame, 0 on incomplete and undef on error
 #
 
-sub _parse ($%) {
+sub parse ($%) {
     my($bufref, %option) = @_;
     my($me, $state, $index);
 
-    $me = "Net::STOMP::Client::Frame::_parse()";
+    $me = "Net::STOMP::Client::Frame::parse()";
     $state = $option{state} || {};
     #
     # before: allow 0 or more newline characters
@@ -219,34 +219,48 @@ sub _parse ($%) {
 # return zero if no complete frame is found and undef on error
 #
 
-sub _decode ($%) {
+sub decode ($%) {
     my($bufref, %option) = @_;
     my($me, $state, $fb, $v1_1, $temp, $frame, $headers, $key, $value, $errors, $line);
 
     #
     # setup
     #
-    $me = "Net::STOMP::Client::Frame::_decode()";
+    $me = "Net::STOMP::Client::Frame::decode()";
     $state = $option{state} || {};
     $fb = $StrictEncode ? Encode::FB_CROAK : Encode::FB_DEFAULT;
     $v1_1 = 1 if $option{version} and $option{version} eq "1.1";
     #
     # frame parsing
     #
-    $temp = _parse($bufref, state => $state);
+    $temp = parse($bufref, state => $state);
     return() unless defined($temp);
     unless ($temp) {
 	# incomplete: we trim the leading newlines anyway...
 	%$state = () if $$bufref =~ s/^\n+//;
 	return(0);
     }
+    #
+    # frame debugging
+    #
+    if ($Net::STOMP::Client::Debug::Flags) {
+	_debug_command("decoding", substr($$bufref, $state->{command_idx}, $state->{command_len}))
+	    if Net::STOMP::Client::Debug::enabled(Net::STOMP::Client::Debug::FRAME);
+	_debug_header(substr($$bufref, $state->{header_idx}, $state->{header_len}))
+	    if Net::STOMP::Client::Debug::enabled(Net::STOMP::Client::Debug::HEADER);
+	_debug_body(substr($$bufref, $state->{body_idx}, $state->{body_len}))
+	    if Net::STOMP::Client::Debug::enabled(Net::STOMP::Client::Debug::BODY);
+    }
+    #
+    # frame decoding
+    #
     $frame = Net::STOMP::Client::Frame->new();
     #
     # command
     #
     $temp = substr($$bufref, $state->{command_idx}, $state->{command_len});
     unless ($temp =~ /^($CommandRE)$/o) {
-	Net::STOMP::Client::Error::report("%s: invalid command", $me);
+	Net::STOMP::Client::Error::report("%s: invalid command: %s", $me, $temp);
 	return();
     }
     $frame->command($temp);
@@ -317,7 +331,7 @@ sub _decode ($%) {
 # encode the given frame object and return a string reference
 #
 
-sub _encode : method {
+sub encode : method {
     my($self, %option) = @_;
     my($v1_1, $string, $headers, $body, $fb, $content_length, $key, $value);
 
@@ -348,7 +362,7 @@ sub _encode : method {
     }
 
     # encode the command and header
-    $string = $self->command() . "\n";
+    $string = "";
     while (($key, $value) = each(%$headers)) {
 	next if $key eq "content-length";
 	if ($v1_1) {
@@ -361,65 +375,91 @@ sub _encode : method {
     if (defined($content_length)) {
 	$string .= "content-length:" . $content_length . "\n";
     }
-    $string .= "\n";
 
     # optionally handle UTF-8 header encoding
     if ($UTF8Header or (not defined($UTF8Header) and $v1_1)) {
 	$string = Encode::encode("UTF-8", $string, $fb);
     }
 
-    # append the body and final NULL character
-    $string .= $body;
-    $string .= "\0";
+    # frame debugging
+    if ($Net::STOMP::Client::Debug::Flags) {
+	_debug_command("encoded", $self->command())
+	    if Net::STOMP::Client::Debug::enabled(Net::STOMP::Client::Debug::FRAME);
+	_debug_header($string)
+	    if Net::STOMP::Client::Debug::enabled(Net::STOMP::Client::Debug::HEADER);
+	_debug_body($body)
+	    if Net::STOMP::Client::Debug::enabled(Net::STOMP::Client::Debug::BODY);
+    }
+
+    # assemble all the parts
+    $value = $self->command() . "\n" . $string . "\n" . $body . "\0";
 
     # return a reference to the encoded frame
-    return(\$string);
+    return(\$value);
 }
 
 #
-# debug the given frame
+# debugging helpers
 #
 
-sub debug : method {
-    my($self, $what) = @_;
-    my($headers, $key, $body, $length, $offset, $line, $ascii, $index, $char);
+sub _debug_command ($$) {
+    my($tag, $command) = @_;
 
-    if (Net::STOMP::Client::Debug::enabled(Net::STOMP::Client::Debug::FRAME)) {
-	$what = "seen" unless $what;
-	Net::STOMP::Client::Debug::report(-1, "%s %s frame", $what, $self->command());
-    }
-    if (Net::STOMP::Client::Debug::enabled(Net::STOMP::Client::Debug::HEADER)) {
-	$headers = $self->headers();
-	$headers = {} unless defined($headers);
-	foreach $key (keys(%$headers)) {
-	    Net::STOMP::Client::Debug::report(-1, "  H %s:%s", $key, $headers->{$key});
-	}
-    }
-    if (Net::STOMP::Client::Debug::enabled(Net::STOMP::Client::Debug::BODY)) {
-	$body = $self->body();
-	$body = "" unless defined($body);
-	$length = length($body);
-	if ($DebugBodyLength and $length > $DebugBodyLength) {
-	    substr($body, $DebugBodyLength) = "";
-	    $length = $DebugBodyLength;
-	}
-	$offset = 0;
-	while ($length > 0) {
-	    $line = sprintf("%04x", $offset);
-	    $ascii = "";
-	    foreach $index (0 .. 15) {
-		$char = $index < $length ? ord(substr($body, $index, 1)) : undef;
-		$line .= " " if ($index & 3) == 0;
-		$line .= defined($char) ? sprintf("%02x", $char) : "  ";
-		$ascii .= " " if ($index & 3) == 0;
-		$ascii .= defined($char) ?
-		    sprintf("%c", (0x20 <= $char && $char <= 0x7e) ? $char : 0x2e) : " ";
+    Net::STOMP::Client::Debug::report(-1, " %s %s frame", $tag, $command);
+}
+
+sub _debug_header ($) {
+    my($header) = @_;
+    my($offset, $length, $line, $char);
+
+    $length = length($header);
+    $offset = 0;
+    while ($offset < $length) {
+	$line = "";
+	while (1) {
+	    $char = ord(substr($header, $offset, 1));
+	    $offset++;
+	    if ($char == 0x0a) {
+		# end of header line
+		last;
+	    } elsif (0x20 <= $char and $char <= 0x7e and $char != 0x25) {
+		# printable
+		$line .= sprintf("%c", $char);
+	    } else {
+		# escaped
+		$line .= sprintf("%%%02x", $char);
 	    }
-	    Net::STOMP::Client::Debug::report(-1, "  B %s %s", $line, $ascii);
-	    $offset += 16;
-	    $length -= 16;
-	    substr($body, 0, 16) = "";
+	    last if $offset == $length;
 	}
+	Net::STOMP::Client::Debug::report(-1, "  H %s", $line);
+    }
+}
+
+sub _debug_body ($) {
+    my($body) = @_;
+    my($offset, $length, $line, $ascii, $index, $char);
+
+    $length = length($body);
+    if ($DebugBodyLength and $length > $DebugBodyLength) {
+	substr($body, $DebugBodyLength) = "";
+	$length = $DebugBodyLength;
+    }
+    $offset = 0;
+    while ($length > 0) {
+	$line = sprintf("%04x", $offset);
+	$ascii = "";
+	foreach $index (0 .. 15) {
+	    $char = $index < $length ? ord(substr($body, $index, 1)) : undef;
+	    $line .= " " if ($index & 3) == 0;
+	    $line .= defined($char) ? sprintf("%02x", $char) : "  ";
+	    $ascii .= " " if ($index & 3) == 0;
+	    $ascii .= defined($char) ?
+		sprintf("%c", (0x20 <= $char && $char <= 0x7e) ? $char : 0x2e) : " ";
+	}
+	Net::STOMP::Client::Debug::report(-1, "  B %s %s", $line, $ascii);
+	$offset += 16;
+	$length -= 16;
+	substr($body, 0, 16) = "";
     }
 }
 
@@ -626,7 +666,7 @@ and C<body>. The C<headers> must be a reference to a hash of header
 key/value pairs. See L<Net::STOMP::Client::OO> for more information on
 the object oriented interface itself.
 
-=head1 FUNCTIONS
+=head1 METHODS
 
 This module provides the following methods:
 
@@ -657,17 +697,91 @@ get/set the body attribute
 get/set the reference to the body attribute (useful to avoid string
 copies when manipulating large bodies)
 
+=item encode([OPTIONS])
+
+encode the given frame and return a binary string suitable to be
+written to a TCP stream (for instance)
+
 =item check()
 
 check that the frame is well-formed, see below for more information
 
-=item debug([TAG])
+=back
 
-if debugging is enabled, dump a frame object on STDERR; for the body,
-at most $Net::STOMP::Client::Frame::DebugBodyLength bytes will be
-printed
+=head1 FUNCTIONS
+
+This module provides the following functions (which are B<not> exported):
+
+=over
+
+=item decode(STRINGREF, [OPTIONS])
+
+decode the given string reference and return a complete frame object,
+if possible, 0 in case there is not enough data for a complete frame
+or C<undef> on error
+
+=item parse(STRINGREF, [OPTIONS])
+
+parse the given string reference and return true on complete frame, 0
+on incomplete and C<undef> on error; see the L<"FRAME PARSING"> section
+for more information
 
 =back
+
+=head1 FRAME PARSING
+
+The parse() function can be used to parse a frame without decoding it.
+
+It takes as input a string reference (to avoid string copies) and an
+optional state (a hash reference). It parses the string to find out
+where the different parts are and it updates its state (if given).
+
+It returns 0 if the string does not hold a complete frame, C<undef> on
+error or a hash reference if a complete frame is present. The hash
+contains the following keys:
+
+=over
+
+=item before_len
+
+the length of what is found before the frame (only newlines can appear here)
+
+=item command_idx, command_len
+
+the start position and length of the command
+
+=item header_idx, header_len
+
+the start position and length of the header
+
+=item body_idx, body_len
+
+the start position and length of the body
+
+=item after_idx, after_len
+
+the length of what is found after the frame (only newlines can appear here)
+
+=item content_length
+
+the value of the "content-length" header (if present)
+
+=item total_len
+
+the total length of the frame, including before and after parts
+
+=back
+
+Here is how this could be used:
+
+  $data = "... read from socket or file ...";
+  $info = Net::STOMP::Client::Frame::parse(\$data);
+  if ($info) {
+      # extract interesting frame parts
+      $command = substr($data, $info->{command_idx}, $info->{command_len});
+      # remove the frame from the buffer
+      substr($data, 0, $info->{total_len}) = "";
+  }
 
 =head1 CONTENT LENGTH
 
