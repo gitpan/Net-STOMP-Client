@@ -13,8 +13,8 @@
 package Net::STOMP::Client;
 use strict;
 use warnings;
-our $VERSION  = "1.1_1";
-our $REVISION = sprintf("%d.%02d", q$Revision: 1.88 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.1_2";
+our $REVISION = sprintf("%d.%02d", q$Revision: 1.90 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -318,6 +318,7 @@ sub new : method {
     $self->_serial(0);
     $self->_receipts({});
     $self->callbacks({});
+    $self->session("");
     return($self);
 }
 
@@ -723,9 +724,12 @@ sub _default_connected_callback ($$) {
 	$self->client_heart_beat(0);
 	$self->server_heart_beat(0);
     }
-    # keep track of session id too
+    # keep track of session id
     unless ($self->session()) {
-	$self->session($frame->header("session"));
+	$value = $frame->header("session");
+	# the session header is optional so we forge our own if it is missing
+	$value ||= sprintf("sid-%s", $self->_id());
+	$self->session($value);
 	return($self);
     }
     _unexpected_frame($frame, $frame->header("session"));
@@ -878,6 +882,7 @@ sub connect : method {
 	callback => sub { return($self->session()) },
 	timeout  => $self->_timeout("connected"),
     );
+    return() unless defined($session);
     return($self) if $session;
     Net::STOMP::Client::Error::report("Net::STOMP::Client->connect(): %s",
 				      "no CONNECTED frame received");
@@ -951,17 +956,18 @@ sub unsubscribe : method {
 
 sub send : method {
     my($self, %option) = @_;
-    my($frame, $timeout, $body);
+    my($frame, $timeout, %frameopt);
 
     $self->_check_invocation(scalar(@_)) or return();
     $timeout = delete($option{timeout});
-    $body = delete($option{body});
+    $frameopt{body} = delete($option{body})
+	if defined($option{body});
+    $frameopt{body_reference} = delete($option{body_reference})
+	if defined($option{body_reference});
+    $frameopt{command} = "SEND";
+    $frameopt{headers} = \%option;
     # send a SEND frame
-    $frame = Net::STOMP::Client::Frame->new(
-	command => "SEND",
-	headers => \%option,
-    );
-    $frame->body($body) if defined($body);
+    $frame = Net::STOMP::Client::Frame->new(%frameopt);
     $self->send_frame($frame, $timeout) or return();
     return($self);
 }
@@ -1376,7 +1382,8 @@ Some methods also support other options:
 
 =item send()
 
-C<body>: holds the body of the message to be sent
+C<body> or C<body_reference>: holds the body or body reference of the
+message to be sent
 
 =item ack()
 
@@ -1412,7 +1419,7 @@ return the file handle of the socket connecting the client and the server
 
 =item session()
 
-return the session identifier if connected or undef otherwise
+return the session identifier if connected or the empty string otherwise
 
 =item version()
 

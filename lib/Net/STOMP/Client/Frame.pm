@@ -13,8 +13,8 @@
 package Net::STOMP::Client::Frame;
 use strict;
 use warnings;
-our $VERSION  = "1.1_1";
-our $REVISION = sprintf("%d.%02d", q$Revision: 1.48 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.1_2";
+our $REVISION = sprintf("%d.%02d", q$Revision: 1.49 $ =~ /(\d+)\.(\d+)/);
 
 #
 # Object Oriented definition
@@ -244,7 +244,8 @@ sub decode ($%) {
     # frame debugging
     #
     if ($Net::STOMP::Client::Debug::Flags) {
-	_debug_command("decoding", substr($$bufref, $state->{command_idx}, $state->{command_len}))
+	_debug_command("decoding",
+		       substr($$bufref, $state->{command_idx}, $state->{command_len}))
 	    if Net::STOMP::Client::Debug::enabled(Net::STOMP::Client::Debug::FRAME);
 	_debug_header(substr($$bufref, $state->{header_idx}, $state->{header_len}))
 	    if Net::STOMP::Client::Debug::enabled(Net::STOMP::Client::Debug::HEADER);

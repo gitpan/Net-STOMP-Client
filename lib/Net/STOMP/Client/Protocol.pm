@@ -13,8 +13,8 @@
 package Net::STOMP::Client::Protocol;
 use strict;
 use warnings;
-our $VERSION  = "1.1_1";
-our $REVISION = sprintf("%d.%02d", q$Revision: 1.12 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.1_2";
+our $REVISION = sprintf("%d.%02d", q$Revision: 1.14 $ =~ /(\d+)\.(\d+)/);
 
 #
 # export control
@@ -74,6 +74,14 @@ use constant FLAG_TYPE_MASK
     => (FLAG_TYPE_UNKNOWN|FLAG_TYPE_BOOLEAN|FLAG_TYPE_INTEGER|FLAG_TYPE_LENGTH);
 
 #
+# shortcuts
+#
+
+use constant FLAG_FIELD_OPTIONAL_BOOLEAN => FLAG_FIELD_OPTIONAL | FLAG_TYPE_BOOLEAN;
+use constant FLAG_FIELD_OPTIONAL_INTEGER => FLAG_FIELD_OPTIONAL | FLAG_TYPE_INTEGER;
+use constant FLAG_FIELD_OPTIONAL_LENGTH  => FLAG_FIELD_OPTIONAL | FLAG_TYPE_LENGTH;
+
+#
 # global variables
 #
 
@@ -86,7 +94,7 @@ our(
 
 #
 # references:
-#  - STOMP 1.0: http://stomp.codehaus.org/Protocol
+#  - STOMP 1.0: http://stomp.github.com/stomp-specification-1.0.html
 #  - STOMP 1.1: http://stomp.github.com/stomp-specification-1.1.html
 #
 
@@ -116,7 +124,7 @@ $CommandFlags{"1.1"}{NACK} = FLAG_DIRECTION_C2S | FLAG_BODY_FORBIDDEN;
 # known fields for both STOMP 1.0 and STOMP 1.1
 #
 
-$FieldFlags{ANY_VERSION()}{CONNECT}{"login"}    = FLAG_FIELD_OPTIONAL;
+$FieldFlags{ANY_VERSION()}{CONNECT}{"login"} = FLAG_FIELD_OPTIONAL;
 $FieldFlags{ANY_VERSION()}{CONNECT}{"passcode"} = FLAG_FIELD_OPTIONAL;
 
 $FieldFlags{ANY_VERSION()}{SEND}{"destination"} = FLAG_FIELD_MANDATORY;
@@ -141,14 +149,14 @@ $FieldFlags{ANY_VERSION()}{COMMIT}{"transaction"} = FLAG_FIELD_MANDATORY;
 
 $FieldFlags{ANY_VERSION()}{ABORT}{"transaction"} = FLAG_FIELD_MANDATORY;
 
-$FieldFlags{ANY_VERSION()}{ACK}{"message-id"}  = FLAG_FIELD_MANDATORY;
+$FieldFlags{ANY_VERSION()}{ACK}{"message-id"} = FLAG_FIELD_MANDATORY;
 $FieldFlags{ANY_VERSION()}{ACK}{"transaction"} = FLAG_FIELD_OPTIONAL;
 
 # DISCONNECT does not have any specific fields
 
 $FieldFlags{ANY_VERSION()}{CONNECTED}{"session"} = FLAG_FIELD_OPTIONAL;
 
-$FieldFlags{ANY_VERSION()}{MESSAGE}{"destination"}  = FLAG_FIELD_MANDATORY;
+$FieldFlags{ANY_VERSION()}{MESSAGE}{"destination"} = FLAG_FIELD_MANDATORY;
 $FieldFlags{ANY_VERSION()}{MESSAGE}{"message-id"} = FLAG_FIELD_MANDATORY;
 # subscription is optional in 1.0 but mandatory in 1.1
 $FieldFlags{"1.0"}{MESSAGE}{"subscription"} = FLAG_FIELD_OPTIONAL;
@@ -163,17 +171,17 @@ $FieldFlags{ANY_VERSION()}{ERROR}{"message"} = FLAG_FIELD_OPTIONAL;
 #
 
 $FieldFlags{"1.1"}{CONNECT}{"accept-version"} = FLAG_FIELD_MANDATORY;
-$FieldFlags{"1.1"}{CONNECT}{"host"}           = FLAG_FIELD_MANDATORY;
-$FieldFlags{"1.1"}{CONNECT}{"heart-beat"}     = FLAG_FIELD_OPTIONAL;
+$FieldFlags{"1.1"}{CONNECT}{"host"} = FLAG_FIELD_MANDATORY;
+$FieldFlags{"1.1"}{CONNECT}{"heart-beat"} = FLAG_FIELD_OPTIONAL;
 
-$FieldFlags{"1.1"}{CONNECTED}{"version"}    = FLAG_FIELD_MANDATORY;
-$FieldFlags{"1.1"}{CONNECTED}{"server"}     = FLAG_FIELD_OPTIONAL;
+$FieldFlags{"1.1"}{CONNECTED}{"version"} = FLAG_FIELD_MANDATORY;
+$FieldFlags{"1.1"}{CONNECTED}{"server"} = FLAG_FIELD_OPTIONAL;
 $FieldFlags{"1.1"}{CONNECTED}{"heart-beat"} = FLAG_FIELD_OPTIONAL;
 
 $FieldFlags{"1.1"}{ACK}{"subscription"} = FLAG_FIELD_MANDATORY;
 
 $FieldFlags{"1.1"}{NACK}{"subscription"} = FLAG_FIELD_MANDATORY;
-$FieldFlags{"1.1"}{NACK}{"message-id"}  = FLAG_FIELD_MANDATORY;
+$FieldFlags{"1.1"}{NACK}{"message-id"} = FLAG_FIELD_MANDATORY;
 $FieldFlags{"1.1"}{NACK}{"transaction"} = FLAG_FIELD_OPTIONAL;
 
 # since these are not explicitly flagged as forbidden in 1.0, we flag them all as optional...
@@ -192,8 +200,7 @@ foreach my $version (keys(%CommandFlags)) {
 	# any frame can have a content-type header
 	$FieldFlags{$version}{$command}{"content-type"} = FLAG_FIELD_OPTIONAL;
 	# any frame can have a content-length header which must be an integer
-	$FieldFlags{$version}{$command}{"content-length"}
-	    = FLAG_FIELD_OPTIONAL | FLAG_TYPE_LENGTH;
+	$FieldFlags{$version}{$command}{"content-length"} = FLAG_FIELD_OPTIONAL_LENGTH;
 	# any client frame (except CONNECT) can have a receipt header
 	next if ($CommandFlags{$version}{$command} & FLAG_DIRECTION_MASK)
 	    == FLAG_DIRECTION_S2C;
@@ -203,11 +210,24 @@ foreach my $version (keys(%CommandFlags)) {
 }
 
 #
+# widely used extensions
+#
+
+foreach my $command (qw(SUBSCRIBE UNSUBSCRIBE SEND MESSAGE)) {
+    $FieldFlags{ANY_VERSION()}{$command}{"persistent"} = FLAG_FIELD_OPTIONAL_BOOLEAN;
+}
+foreach my $command (qw(SEND MESSAGE)) {
+    $FieldFlags{ANY_VERSION()}{$command}{"correlation-id"} = FLAG_FIELD_OPTIONAL;
+    $FieldFlags{ANY_VERSION()}{$command}{"priority"} = FLAG_FIELD_OPTIONAL_INTEGER;
+    $FieldFlags{ANY_VERSION()}{$command}{"reply-to"} = FLAG_FIELD_OPTIONAL;
+}
+
+#
 # STOMP JMS Bindings (http://stomp.codehaus.org/StompJMS)
 #
 
 $FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"selector"} = FLAG_FIELD_OPTIONAL;
-$FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"no-local"} = FLAG_FIELD_OPTIONAL | FLAG_TYPE_BOOLEAN;
+$FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"no-local"} = FLAG_FIELD_OPTIONAL_BOOLEAN;
 $FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"durable-subscriber-name"} = FLAG_FIELD_OPTIONAL;
 
 #
@@ -215,12 +235,9 @@ $FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"durable-subscriber-name"} = FLAG_FIELD_OP
 # plus JMSXUserID (http://activemq.apache.org/jmsxuserid.html)
 #
 
-foreach my $field (qw(correlation-id expires persistent priority reply-to type
-                      JMSXGroupID JMSXGroupSeq JMSXUserID)) {
-    my $type = FLAG_TYPE_UNKNOWN;
-    $type = FLAG_TYPE_BOOLEAN if $field =~ /^(persistent)$/;
-    $type = FLAG_TYPE_INTEGER if $field =~ /^(expires|priority)$/;
-    $FieldFlags{ANY_VERSION()}{SEND}{$field}    = FLAG_FIELD_OPTIONAL | $type;
+foreach my $field (qw(expires type JMSXGroupID JMSXGroupSeq JMSXUserID)) {
+    my $type = $field eq "expires" ? FLAG_TYPE_INTEGER : FLAG_TYPE_UNKNOWN;
+    $FieldFlags{ANY_VERSION()}{SEND}{$field} = FLAG_FIELD_OPTIONAL | $type;
     $FieldFlags{ANY_VERSION()}{MESSAGE}{$field} = FLAG_FIELD_OPTIONAL | $type;
 }
 
@@ -236,7 +253,7 @@ foreach my $field (qw(dispatchAsync exclusive maximumPendingMessageLimit noLocal
         if $field =~ /^(dispatchAsync|exclusive|noLocal|retroactive)$/;
     $type = FLAG_TYPE_INTEGER
         if $field =~ /^(maximumPendingMessageLimit|prefetchSize|priority)$/;
-    $FieldFlags{ANY_VERSION()}{SUBSCRIBE}{$field} = FLAG_FIELD_OPTIONAL | $type;
+    $FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"activemq.$field"} = FLAG_FIELD_OPTIONAL | $type;
 }
 
 #
@@ -249,11 +266,25 @@ foreach my $field (qw(originBrokerId originBrokerName originBrokerURL orignalMes
 }
 
 #
-# RabbitMQ extensions to STOMP (http://dev.rabbitmq.com/wiki/StompGateway)
+# Apollo extensions to STOMP (http://activemq.apache.org/apollo/versions/1.0-SNAPSHOT/website/documentation/user-manual.html)
 #
 
-$FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"exchange"} = FLAG_FIELD_OPTIONAL;
-$FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"routing_key"} = FLAG_FIELD_OPTIONAL;
+$FieldFlags{ANY_VERSION()}{CONNECTED}{"user-id"} = FLAG_FIELD_OPTIONAL;
+$FieldFlags{ANY_VERSION()}{MESSAGE}{"browser"} = FLAG_FIELD_OPTIONAL;
+$FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"auto-delete"} = FLAG_FIELD_OPTIONAL_BOOLEAN;
+$FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"browser"} = FLAG_FIELD_OPTIONAL_BOOLEAN;
+$FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"credit"} = FLAG_FIELD_OPTIONAL;
+$FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"exclusive"} = FLAG_FIELD_OPTIONAL_BOOLEAN;
+
+#
+# RabbitMQ extensions to STOMP (http://www.rabbitmq.com/stomp.html)
+#
+
+$FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"prefetch-count"} = FLAG_FIELD_OPTIONAL_INTEGER;
+foreach my $field (qw(amqp-message-id content-encoding)) {
+    $FieldFlags{ANY_VERSION()}{SEND}{$field} = FLAG_FIELD_OPTIONAL;
+    $FieldFlags{ANY_VERSION()}{MESSAGE}{$field} = FLAG_FIELD_OPTIONAL;
+}
 
 #
 # other undocumented headers :-(
