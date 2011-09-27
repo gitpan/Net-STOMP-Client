@@ -13,8 +13,8 @@
 package Net::STOMP::Client;
 use strict;
 use warnings;
-our $VERSION  = "1.1_2";
-our $REVISION = sprintf("%d.%02d", q$Revision: 1.90 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.2";
+our $REVISION = sprintf("%d.%02d", q$Revision: 1.91 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -1681,14 +1681,14 @@ positive number (meaning block at most this number of seconds).
 
 =head1 COMPATIBILITY
 
-This module implements the versions C<1.0> (see
-L<http://stomp.github.com/stomp-specification-1.0.html>) and C<1.1>
-(see L<http://stomp.github.com/stomp-specification-1.1.html>) of the
-protocol as well as well known extensions for JMS, AMQP, ActiveMQ and
-RabbitMQ.
+This module implements the versions
+C<1.0> (see L<http://stomp.github.com/stomp-specification-1.0.html>) and
+C<1.1> (see L<http://stomp.github.com/stomp-specification-1.1.html>)
+of the protocol as well as well known extensions for JMS, ActiveMQ,
+Apollo and RabbitMQ.
 
-It has been successfully tested against both ActiveMQ and RabbitMQ
-brokers.
+It has been successfully tested against ActiveMQ, Apollo, HornetQ and
+RabbitMQ brokers.
 
 =head1 SEE ALSO
 

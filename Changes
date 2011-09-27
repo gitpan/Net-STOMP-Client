@@ -1,6 +1,6 @@
 Revision history for Net-STOMP-Client:
 
-1.1_2	Tue Sep 13 2011 (developer release - for testing purposes only)
+1.2	Tue Sep 27 2011
 	* Net::STOMP::Client::Frame: the frame parsing, decoding and encoding
 	  code is now documented and can be used outside of this module.
 	* Improved frame debugging to really show what has been sent/received.
