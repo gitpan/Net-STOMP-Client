@@ -20,12 +20,19 @@ To install this module, run the following commands:
 
 To test this module with a STOMP broker, see t/2broker.t.
 
+In addition to the mandatory modules listed in Makefile.PL, the
+following optional modules do bring extra functionality:
+
+    IO::Socket::SSL - allows using STOMP over SSL
+    Messaging::Message - allows frame <-> message conversions
+
 SUPPORT AND DOCUMENTATION
 
 After installing, you can find documentation for this module with the
 perldoc command.
 
     perldoc Net::STOMP::Client
+    perldoc Net::STOMP::Client::Frame
 
 You can find some examples in the eg directory and a detailed tutorial:
 

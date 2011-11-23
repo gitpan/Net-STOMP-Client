@@ -20,5 +20,6 @@ t/1check.t
 t/1frame.t
 t/1parse.t
 t/2broker.t
+t/2message.t
 t/3pod.t
 t/4podcov.t

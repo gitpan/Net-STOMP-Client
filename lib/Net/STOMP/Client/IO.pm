@@ -13,8 +13,8 @@
 package Net::STOMP::Client::IO;
 use strict;
 use warnings;
-our $VERSION  = "1.2";
-our $REVISION = sprintf("%d.%02d", q$Revision: 1.23 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.3";
+our $REVISION = sprintf("%d.%02d", q$Revision: 1.25 $ =~ /(\d+)\.(\d+)/);
 
 #
 # Object Oriented definition
@@ -32,7 +32,6 @@ use Net::STOMP::Client::Debug;
 use Net::STOMP::Client::Error;
 use IO::Select;
 use Time::HiRes qw();
-use UNIVERSAL qw();
 
 #
 # constants
@@ -48,7 +47,7 @@ sub new : method {
     my($class, $socket) = @_;
     my($self, $select);
 
-    unless ($socket and UNIVERSAL::isa($socket, "IO::Socket")) {
+    unless ($socket and ref($socket) and $socket->isa("IO::Socket")) {
 	Net::STOMP::Client::Error::report("Net::STOMP::Client::IO->new(): missing socket");
 	return();
     }

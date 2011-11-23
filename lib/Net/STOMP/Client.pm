@@ -13,8 +13,8 @@
 package Net::STOMP::Client;
 use strict;
 use warnings;
-our $VERSION  = "1.2";
-our $REVISION = sprintf("%d.%02d", q$Revision: 1.91 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.3";
+our $REVISION = sprintf("%d.%02d", q$Revision: 1.94 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -87,8 +87,8 @@ sub _timeout : method {
 	};
     }
     unless ($operation =~ /^(connect|connected|receive|send)$/) {
-	Net::STOMP::Client::Error::report("%s: unexpected timeout operation: %s",
-					  "Net::STOMP::Client", $operation);
+	Net::STOMP::Client::Error::report
+	    ("%s: unexpected timeout operation: %s", "Net::STOMP::Client", $operation);
 	return();
     }
     return($timeout->{$operation});
@@ -111,27 +111,28 @@ sub _new_socket ($$$$%) {
     # try to connect
     if ($proto =~ /\b(ssl)\b/) {
 	# with SSL
-	unless ($INC{"IO/Socket/SSL.pm"}) {
+	unless ($IO::Socket::SSL::VERSION) {
 	    eval { require IO::Socket::SSL };
 	    if ($@) {
-		Net::STOMP::Client::Error::report("%s: cannot load IO::Socket::SSL: %s",
-						  $me, $@);
+		Net::STOMP::Client::Error::report
+		    ("%s: cannot load IO::Socket::SSL: %s", $me, $@);
 		return();
 	    }
 	}
 	$socket = IO::Socket::SSL->new(%sockopts);
 	unless ($socket) {
-	    Net::STOMP::Client::Error::report("%s: cannot SSL connect to %s:%d: %s",
-				      $me, $sockopts{PeerAddr}, $sockopts{PeerPort},
-				      IO::Socket::SSL::errstr());
+	    Net::STOMP::Client::Error::report
+		("%s: cannot SSL connect to %s:%d: %s", $me, $sockopts{PeerAddr},
+		 $sockopts{PeerPort}, IO::Socket::SSL::errstr());
 	    return();
 	}
     } else {
 	# with TCP
 	$socket = IO::Socket::INET->new(%sockopts);
 	unless ($socket) {
-	    Net::STOMP::Client::Error::report("%s: cannot connect to %s:%d: %s",
-				      $me, $sockopts{PeerAddr}, $sockopts{PeerPort}, $!);
+	    Net::STOMP::Client::Error::report
+		("%s: cannot connect to %s:%d: %s", $me, $sockopts{PeerAddr},
+		 $sockopts{PeerPort}, $!);
 	    return();
 	}
 	unless (binmode($socket)) {
@@ -226,8 +227,8 @@ sub _check_version ($$) {
     }
     foreach $version (@list) {
 	unless ($version =~ /^1\.[01]$/) {
-	    Net::STOMP::Client::Error::report("%s: unsupported STOMP version: %s",
-					      $me, $version);
+	    Net::STOMP::Client::Error::report
+		("%s: unsupported STOMP version: %s", $me, $version);
 	    return();
 	}
     }
@@ -257,13 +258,13 @@ sub new : method {
     }
     if ($self->uri()) {
 	if ($self->host()) {
-	    Net::STOMP::Client::Error::report("%s: unexpected server host: %s",
-					      $me, $self->host());
+	    Net::STOMP::Client::Error::report
+		("%s: unexpected server host: %s", $me, $self->host());
 	    return();
 	}
 	if ($self->port()) {
-	    Net::STOMP::Client::Error::report("%s: unexpected server port: %s",
-					      $me, $self->port());
+	    Net::STOMP::Client::Error::report
+		("%s: unexpected server port: %s", $me, $self->port());
 	    return();
 	}
 	@peers = _handle_uri($me, $self->uri());
@@ -381,9 +382,11 @@ sub send_data : method {
     my($self, $timeout) = @_;
 
     # check that the I/O object is still usable
-    Net::STOMP::Client::Error::report(
-	"Net::STOMP::Client->send_data(): lost connection"
-    ) unless $self->_io();
+    unless ($self->_io()) {
+	Net::STOMP::Client::Error::report
+	    ("Net::STOMP::Client->send_data(): lost connection");
+	return();
+    }
     # handle the global send timeout
     $timeout = $self->_timeout("send") unless defined($timeout);
     # just do it
@@ -406,9 +409,8 @@ sub send_frame : method {
     return() unless defined($result);
     # make sure we sent _all_ data
     if ($self->_io()->outgoing_buffer_length()) {
-	Net::STOMP::Client::Error::report(
-	    "Net::STOMP::Client->send_frame(): could not send all data!"
-	);
+	Net::STOMP::Client::Error::report
+	    ("Net::STOMP::Client->send_frame(): could not send all data!");
 	return();
     }
     # so far so good...
@@ -423,9 +425,11 @@ sub receive_data : method {
     my($self, $timeout) = @_;
 
     # check that the I/O object is still usable
-    Net::STOMP::Client::Error::report(
-	"Net::STOMP::Client->receive_data(): lost connection"
-    ) unless $self->_io();
+    unless ($self->_io()) {
+	Net::STOMP::Client::Error::report
+	    ("Net::STOMP::Client->receive_data(): lost connection");
+	return();
+    }
     # handle the global receive timeout
     $timeout = $self->_timeout("receive") unless defined($timeout);
     # just do it
@@ -666,8 +670,8 @@ sub _unexpected_frame ($$) {
     my($frame, $info) = @_;
 
     $info ||= "?";
-    Net::STOMP::Client::Error::report("unexpected %s frame received: %s",
-				      $frame->command(), $info);
+    Net::STOMP::Client::Error::report
+	("unexpected %s frame received: %s", $frame->command(), $info);
 }
 
 #
@@ -679,6 +683,11 @@ sub _default_connected_callback ($$) {
     my($self, $frame) = @_;
     my($value);
 
+    # report an error if we are already connected
+    if ($self->session()) {
+	_unexpected_frame($frame, "already connected");
+	return();
+    }
     # STOMP 1.1: handle version negotiation
     $value = $frame->header("version");
     if ($value) {
@@ -725,15 +734,11 @@ sub _default_connected_callback ($$) {
 	$self->server_heart_beat(0);
     }
     # keep track of session id
-    unless ($self->session()) {
-	$value = $frame->header("session");
-	# the session header is optional so we forge our own if it is missing
-	$value ||= sprintf("sid-%s", $self->_id());
-	$self->session($value);
-	return($self);
-    }
-    _unexpected_frame($frame, $frame->header("session"));
-    return();
+    $value = $frame->header("session");
+    # the session header is optional so we forge our own if it is missing
+    $value ||= sprintf("sid-%s", $self->_id());
+    $self->session($value);
+    return($self);
 }
 $Callback{CONNECTED} = \&_default_connected_callback;
 
@@ -852,8 +857,8 @@ sub connect : method {
     }
     # must be called before connection
     if ($self->session()) {
-	Net::STOMP::Client::Error::report("%s: already connected with session: %s",
-					  $me, $self->session());
+	Net::STOMP::Client::Error::report
+	    ("%s: already connected with session: %s", $me, $self->session());
 	return();
     }
     # so far so good
@@ -884,8 +889,8 @@ sub connect : method {
     );
     return() unless defined($session);
     return($self) if $session;
-    Net::STOMP::Client::Error::report("Net::STOMP::Client->connect(): %s",
-				      "no CONNECTED frame received");
+    Net::STOMP::Client::Error::report
+	("Net::STOMP::Client->connect(): %s", "no CONNECTED frame received");
     return();
 }
 
@@ -1010,8 +1015,8 @@ sub nack : method {
 
     $self->_check_invocation(scalar(@_)) or return();
     if ($self->version() eq "1.0") {
-	Net::STOMP::Client::Error::report("Net::STOMP::Client->nack(): %s %s",
-					  "not supported for STOMP", $self->version());
+	Net::STOMP::Client::Error::report
+	    ("Net::STOMP::Client->nack(): %s %s", "not supported for STOMP", $self->version());
 	return();
     }
     $timeout = delete($option{timeout});

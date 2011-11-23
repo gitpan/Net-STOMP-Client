@@ -7,23 +7,25 @@ my(%param, $emv, $name);
 %param = (
     NAME                   => 'Net::STOMP::Client',
     AUTHOR                 => 'Lionel Cons <lionel.cons@cern.ch>',
-    VERSION                => '1.2',
+    VERSION                => '1.3',
     ABSTRACT_FROM          => 'lib/Net/STOMP/Client.pm',
     LICENSE                => 'perl',
     PL_FILES               => {},
     BUILD_REQUIRES => {
+        # optional: Pod::Coverage
         'Test::More'       => 0,
-        # Test::Pod is optional
+        # optional: Test::Pod
+        # optional: Test::Pod::Coverage
     },
     PREREQ_PM => {
         'Encode'           => 0,
         'Exporter'         => 0,
         'IO::Select'       => 0,
         'IO::Socket::INET' => 0,
-        # IO::Socket::SSL is optional
+	# optional: IO::Socket::SSL
         'List::Util'       => 0,
+	# optional: Messaging::Message
         'Time::HiRes'      => 0,
-        'UNIVERSAL'        => 0,
     },
     dist                   => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
     clean                  => { FILES => 'Net-STOMP-Client-*' },

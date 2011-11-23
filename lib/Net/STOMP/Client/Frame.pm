@@ -13,8 +13,8 @@
 package Net::STOMP::Client::Frame;
 use strict;
 use warnings;
-our $VERSION  = "1.2";
-our $REVISION = sprintf("%d.%02d", q$Revision: 1.49 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.3";
+our $REVISION = sprintf("%d.%02d", q$Revision: 1.50 $ =~ /(\d+)\.(\d+)/);
 
 #
 # Object Oriented definition
@@ -628,6 +628,93 @@ sub check : method {
     return($self);
 }
 
+#+++############################################################################
+#                                                                              #
+# integration with Messaging::Message                                          #
+#                                                                              #
+#---############################################################################
+
+#
+# transform a frame into a message
+#
+
+sub messagify : method {
+    my($self) = @_;
+    my($me, $msg, $tmp);
+
+    $me = "Net::STOMP::Client::Frame->messagify()";
+    unless ($Messaging::Message::VERSION) {
+	eval { require Messaging::Message };
+	if ($@) {
+	    Net::STOMP::Client::Error::report("%s: cannot load Messaging::Message: %s",
+					      $me, $@);
+	    return();
+	}
+    }
+    $msg = Messaging::Message->new();
+    # handler header
+    $tmp = $self->headers();
+    $msg->header($tmp) if $tmp;
+    # handle text
+    $tmp = $msg->header_field("content-type");
+    $msg->text(1) if $tmp and ($tmp =~ /^text\// or $tmp =~ /\bcharset=/);
+    # handle body
+    $tmp = $self->body_reference();
+    $msg->body_ref($tmp) if $tmp;
+    return($msg);
+}
+
+#
+# transform a message into a frame
+#
+
+sub demessagify : method {
+    my($class, $msg) = @_;
+    my($me, $frame, $tmp);
+
+    $me = "Net::STOMP::Client::Frame->demessagify()";
+    unless ($Messaging::Message::VERSION) {
+	eval { require Messaging::Message };
+	if ($@) {
+	    Net::STOMP::Client::Error::report("%s: cannot load Messaging::Message: %s",
+					      $me, $@);
+	    return();
+	}
+    }
+    unless ($msg and ref($msg) and $msg->isa("Messaging::Message")) {
+	Net::STOMP::Client::Error::report("%s: missing message", $me);
+	return();
+    }
+    $frame = Net::STOMP::Client::Frame->new(
+	command        => "SEND",
+	headers        => $msg->header(),
+	body_reference => $msg->body_ref(),
+    );
+    # handle text
+    $tmp = $msg->header_field("content-type");
+    if (defined($tmp)) {
+	# make sure the content-type is consistent with the message type
+	if ($tmp =~ /^text\// or $tmp =~ /\bcharset=/) {
+	    unless ($msg->text()) {
+		Net::STOMP::Client::Error::report
+		    ("%s: unexpected text content-type for binary message: %s", $me, $tmp);
+		return();
+	    }
+	} else {
+	    if ($msg->text()) {
+		Net::STOMP::Client::Error::report
+		    ("%s: unexpected binary content-type for text message: %s", $me, $tmp);
+		return();
+	    }
+	}
+    } else {
+	# set a text content-type if it is missing (this is needed by STOMP 1.1)
+	$frame->headers({ %{ $frame->headers() }, "content-type" => "text/unknown" })
+	    if $msg->text();
+    }
+    return($frame);
+}
+
 1;
 
 __END__
@@ -846,6 +933,37 @@ Encode::FB_CROAK flag instead of the default Encode::FB_DEFAULT.
 N.B.: Perl's standard Encode module is used for all encoding/decoding
 operations.
 
+=head1 MESSAGING ABSTRACTION
+
+If the L<Messaging::Message> module is available, the following
+methods are available:
+
+=over
+
+=item messagify()
+
+transform the frame into a Messaging::Message object
+
+=item demessagify(MESSAGE)
+
+transform the given Messaging::Message object into a
+Net::STOMP::Client::Frame object (class method)
+
+=back
+
+Here is how they could be used:
+
+  # frame to message
+  $frame = $stomp->wait_for_frames(timeout => 1);
+  if ($frame) {
+      $message = $frame->messagify();
+      ...
+  }
+
+  # message to frame
+  $frame = Net::STOMP::Client::Frame->demessagify($message);
+  $stomp->send_frame($frame);
+
 =head1 COMPLIANCE
 
 STOMP 1.0 has several ambiguities and this module does its best to
@@ -961,6 +1079,7 @@ method.
 
 L<Net::STOMP::Client::Debug>,
 L<Net::STOMP::Client::OO>,
+L<Messaging::Message>,
 L<Encode>.
 
 =head1 AUTHOR
