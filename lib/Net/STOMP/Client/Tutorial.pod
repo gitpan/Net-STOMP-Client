@@ -205,15 +205,17 @@ When you are done, you simply unsubscribe with:
 
 It is good practice to add an C<id> header to uniquely identify the
 subscription. All messages part of this subscription will have a matching
-C<subscription> header. This C<id> can also be used to later unsubscribe.
-For instance:
+C<subscription> header. This C<id> can also be used to unsubscribe.
+
+In fact, the code above only works with STOMP 1.0. In STOMP 1.1, the
+C<id> header has been made mandatory so you must use something like:
 
   $stomp->subscribe(
       destination => "/queue/test",
-      id          => "my-test-sub",
+      id          => "testsub",
   );
-  # received messages will contain: subscription:my-test-sub
-  $stomp->unsubscribe(id => "my-test-sub");
+  # received messages will contain: subscription:testsub
+  $stomp->unsubscribe(id => "testsub");
 
 =head2 RECEIVING FRAMES
 
@@ -268,7 +270,7 @@ messages from to C</queue/test>:
   $sid = $stomp->uuid();
   $stomp->subscribe(
       destination => "/queue/test",
-      # we use a subscription id
+      # we use the generated subscription id
       id          => $sid,
       # we want a receipt on our SUBSCRIBE frame
       receipt     => $stomp->uuid(),
@@ -422,6 +424,7 @@ the C<SUBSCRIBE> frame:
 
   $stomp->subscribe(
       destination => "/queue/test",
+      id          => $sid,
       ack         => "client",
   );
 
@@ -481,4 +484,4 @@ L<Net::STOMP::Client::Peer>.
 
 Lionel Cons L<http://cern.ch/lionel.cons>
 
-Copyright CERN 2010-2011
+Copyright CERN 2010-2012

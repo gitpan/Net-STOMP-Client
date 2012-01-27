@@ -13,16 +13,17 @@
 package Net::STOMP::Client;
 use strict;
 use warnings;
-our $VERSION  = "1.3";
-our $REVISION = sprintf("%d.%02d", q$Revision: 1.94 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.4";
+our $REVISION = sprintf("%d.%02d", q$Revision: 1.97 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
 #
 
 use IO::Socket::INET;
-use List::Util qw(max shuffle);
+use List::Util qw(max);
 use Time::HiRes qw();
+use Net::STOMP::Client::Connection;
 use Net::STOMP::Client::Debug;
 use Net::STOMP::Client::Error;
 use Net::STOMP::Client::Frame;
@@ -95,115 +96,6 @@ sub _timeout : method {
 }
 
 #
-# try to connect to the server (socket level only)
-#
-
-sub _new_socket ($$$$%) {
-    my($me, $proto, $host, $port, %sockopts) = @_;
-    my($socket);
-
-    # initial checks
-    $sockopts{Proto} = "tcp"; # yes, even SSL is TCP...
-    $sockopts{PeerAddr} = $host;
-    $sockopts{PeerPort} = $port;
-    # from now on, the errors are non-fatal and checked by the caller...
-    local $Net::STOMP::Client::Error::Die = 0;
-    # try to connect
-    if ($proto =~ /\b(ssl)\b/) {
-	# with SSL
-	unless ($IO::Socket::SSL::VERSION) {
-	    eval { require IO::Socket::SSL };
-	    if ($@) {
-		Net::STOMP::Client::Error::report
-		    ("%s: cannot load IO::Socket::SSL: %s", $me, $@);
-		return();
-	    }
-	}
-	$socket = IO::Socket::SSL->new(%sockopts);
-	unless ($socket) {
-	    Net::STOMP::Client::Error::report
-		("%s: cannot SSL connect to %s:%d: %s", $me, $sockopts{PeerAddr},
-		 $sockopts{PeerPort}, IO::Socket::SSL::errstr());
-	    return();
-	}
-    } else {
-	# with TCP
-	$socket = IO::Socket::INET->new(%sockopts);
-	unless ($socket) {
-	    Net::STOMP::Client::Error::report
-		("%s: cannot connect to %s:%d: %s", $me, $sockopts{PeerAddr},
-		 $sockopts{PeerPort}, $!);
-	    return();
-	}
-	unless (binmode($socket)) {
-	    Net::STOMP::Client::Error::report("%s: cannot binmode(socket): %s", $me, $!);
-	    return();
-	}
-    }
-    # so far so good...
-    return($socket);
-}
-
-#
-# check and handle the uri option
-#
-# see: http://activemq.apache.org/failover-transport-reference.html
-#
-
-sub _handle_uri ($$) {
-    my($me, $string) = @_;
-    my(@uris, $uri, $path, $fh, $line, @list, @peers);
-
-    @uris = ($string);
-    while (@uris) {
-	$uri = shift(@uris);
-	if ($uri =~ /^file:(.+)$/) {
-	    # list of uris stored in a file, one per line
-	    @list = ();
-	    $path = $1;
-	    unless (open($fh, "<", $path)) {
-		Net::STOMP::Client::Error::report("%s: cannot open %s: %s", $me, $path, $!);
-		return();
-	    }
-	    while (defined($line = <$fh>)) {
-		$line =~ s/\#.*//;
-		$line =~ s/\s+//g;
-		push(@list, $line) if length($line);
-	    }
-	    unless (close($fh)) {
-		Net::STOMP::Client::Error::report("%s: cannot close %s: %s", $me, $path, $!);
-		return();
-	    }
-	    unshift(@uris, @list);
-	} elsif ($uri =~ /^failover:(\/\/)?\(([\w\.\-\:\/\,]+)\)(\?[\w\=\-\&]+)?$/) {
-	    # failover with options (only "randomize" is supported)
-	    @list = split(/,/, $2);
-	    @list = shuffle(@list) unless $3 and $3 =~ /\b(randomize=false)\b/;
-	    unshift(@uris, @list);
-	} elsif ($uri =~ /^failover:([\w\.\-\:\/\,]+)$/) {
-	    # failover without options (randomized by default)
-	    @list = split(/,/, $1);
-	    unshift(@uris, shuffle(@list));
-	} elsif ($uri =~ /^(tcp|ssl|stomp|stomp\+ssl):\/\/([\w\.\-]+):(\d+)\/?$/) {
-	    # well-formed uri
-	    push(@peers, Net::STOMP::Client::Peer->new(
-		proto => $1,
-		host  => $2,
-		port  => $3,
-	    ));
-	} else {
-	    Net::STOMP::Client::Error::report("%s: unexpected server uri: %s", $me, $string);
-	    return();
-	}
-    }
-    unless (@peers) {
-	Net::STOMP::Client::Error::report("%s: empty server uri: %s", $me, $string);
-	return();
-    }
-    return(@peers);
-}
-
-#
 # check the version option
 #
 
@@ -243,7 +135,7 @@ sub _check_version ($$) {
 
 sub new : method {
     my($class, %data) = @_;
-    my($me, $self, %sockopts, $timeout, @uris, $uri, @peers, $peer, $socket, $io, $version);
+    my($me, $self, %sockopts, $timeout, $peer, $socket, $io, $version);
 
     $me = "Net::STOMP::Client->new()";
     $version = delete($data{version});
@@ -256,52 +148,10 @@ sub new : method {
 	$timeout = $self->_timeout("connect");
 	$sockopts{Timeout} = $timeout if $timeout;
     }
-    if ($self->uri()) {
-	if ($self->host()) {
-	    Net::STOMP::Client::Error::report
-		("%s: unexpected server host: %s", $me, $self->host());
-	    return();
-	}
-	if ($self->port()) {
-	    Net::STOMP::Client::Error::report
-		("%s: unexpected server port: %s", $me, $self->port());
-	    return();
-	}
-	@peers = _handle_uri($me, $self->uri());
-	return() unless @peers;
-	# use by default a shorter timeout in case we use failover...
-	if (@peers > 1 and not $sockopts{Timeout}) {
-	    # it makes no sense to block with failover!
-	    $sockopts{Timeout} = 3;
-	}
-    } else {
-	unless ($self->host()) {
-	    Net::STOMP::Client::Error::report("%s: missing server host", $me);
-	    return();
-	}
-	unless ($self->port()) {
-	    Net::STOMP::Client::Error::report("%s: missing server port", $me);
-	    return();
-	}
-	@peers = (Net::STOMP::Client::Peer->new(
-	    proto => grep(/^SSL_/, keys(%sockopts)) ? "ssl" : "tcp",
-	    host  => $self->host(),
-	    port  => $self->port(),
-	));
-    }
-    foreach $peer (@peers) {
-	$socket = _new_socket($me, $peer->proto(), $peer->host(), $peer->port(), %sockopts);
-	if ($socket) {
-	    # keep track of the peer we are connected to
-	    $peer->addr($socket->peerhost()); # real peer address
-	    $self->peer($peer);
-	    last;
-	}
-    }
-    unless ($socket) {
-	Net::STOMP::Client::Error::report("%s", $Net::STOMP::Client::Error::Message);
-	return();
-    }
+    ($socket, $peer) = Net::STOMP::Client::Connection::_new
+	($me, $self->host(), $self->port(), $self->uri(), %sockopts);
+    return() unless $socket;
+    $self->peer($peer);
     # final setup steps
     if ($self->uri()) {
 	# keep track of the peer this way too...
@@ -1168,7 +1018,11 @@ Net::STOMP::Client - STOMP object oriented client module
       return($self);
   });
   # subscribe to the given queue
-  $stomp->subscribe(destination => "/queue/test", ack => "client");
+  $stomp->subscribe(
+      destination => "/queue/test",
+      id          => "testsub",          # required in STOMP 1.1
+      ack         => "client",           # client side acknowledgment
+  );
   # wait for a specified message frame
   $stomp->wait_for_frames(callback => sub {
       my($self, $frame) = @_;
@@ -1180,7 +1034,7 @@ Net::STOMP::Client - STOMP object oriented client module
       # continue to wait for more frames
       return(0);
   });
-  $stomp->unsubscribe(destination => "/queue/test");
+  $stomp->unsubscribe(id => "testsub");
   $stomp->disconnect();
 
 =head1 DESCRIPTION
@@ -1378,6 +1232,7 @@ frame headers. For instance:
 
   $stomp->subscribe(
       destination => "/queue/test",
+      id          => "testsub",
       ack         => "client",
   );
 
@@ -1708,4 +1563,4 @@ L<Time::HiRes>.
 
 Lionel Cons L<http://cern.ch/lionel.cons>
 
-Copyright CERN 2010-2011
+Copyright CERN 2010-2012

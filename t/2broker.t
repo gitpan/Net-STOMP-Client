@@ -92,7 +92,10 @@ sub test_noop () {
 # test subscribe+send+unsubscribe, without receipts
 
 sub test_loopback () {
-    my(%option, $count, $frame);
+    my(%option, $count, $frame, $subid);
+
+    # use a unique subscription id
+    $subid = $stomp->uuid();
 
     # count the messages
     $count = 0;
@@ -104,6 +107,7 @@ sub test_loopback () {
     });
 
     %option = ();
+    $option{id} = $subid;
     $option{destination} = $ENV{PNSCT_DESTINATION};
     $stomp->subscribe(%option);
     ok(1, "subscribe");
@@ -136,7 +140,7 @@ sub test_loopback () {
     }
 
     %option = ();
-    $option{destination} = $ENV{PNSCT_DESTINATION};
+    $option{id} = $subid;
     $stomp->unsubscribe(%option);
     ok(1, "unsubscribe");
 

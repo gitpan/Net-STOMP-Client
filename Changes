@@ -1,5 +1,9 @@
 Revision history for Net-STOMP-Client:
 
+1.4	Fri Jan 27 2012
+	* Improved the documentation wrt subscription id (RT#73060).
+	* Improved ActiveMQ failover URI support.
+
 1.3	Wed Nov 23 2011
 	* Fixed our use of isa() (RT#71520).
 	* Added support for Messaging::Message (this module is optional).

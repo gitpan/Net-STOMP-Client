@@ -13,8 +13,8 @@
 package Net::STOMP::Client::OO;
 use strict;
 use warnings;
-our $VERSION  = "1.3";
-our $REVISION = sprintf("%d.%02d", q$Revision: 1.15 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.4";
+our $REVISION = sprintf("%d.%02d", q$Revision: 1.16 $ =~ /(\d+)\.(\d+)/);
 
 #
 # global variables
@@ -129,4 +129,4 @@ this method implements the inheritable constructor described above
 
 Lionel Cons L<http://cern.ch/lionel.cons>
 
-Copyright CERN 2010-2011
+Copyright CERN 2010-2012

@@ -13,8 +13,8 @@
 package Net::STOMP::Client::Debug;
 use strict;
 use warnings;
-our $VERSION  = "1.3";
-our $REVISION = sprintf("%d.%02d", q$Revision: 1.13 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.4";
+our $REVISION = sprintf("%d.%02d", q$Revision: 1.14 $ =~ /(\d+)\.(\d+)/);
 
 #
 # constants
@@ -124,4 +124,4 @@ return true if the current debugging flags match the given mask
 
 Lionel Cons L<http://cern.ch/lionel.cons>
 
-Copyright CERN 2010-2011
+Copyright CERN 2010-2012

@@ -13,8 +13,8 @@
 package Net::STOMP::Client::IO;
 use strict;
 use warnings;
-our $VERSION  = "1.3";
-our $REVISION = sprintf("%d.%02d", q$Revision: 1.25 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.4";
+our $REVISION = sprintf("%d.%02d", q$Revision: 1.26 $ =~ /(\d+)\.(\d+)/);
 
 #
 # Object Oriented definition
@@ -323,4 +323,4 @@ return the length of the internal outgoing buffer
 
 Lionel Cons L<http://cern.ch/lionel.cons>
 
-Copyright CERN 2010-2011
+Copyright CERN 2010-2012
