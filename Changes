@@ -1,5 +1,9 @@
 Revision history for Net-STOMP-Client:
 
+1.5	Tue Feb 28 2012
+	* Improved the documentation wrt failover support id (RT#74738).
+	* Added a server() method to access the CONNECTED frame's server header.
+
 1.4	Fri Jan 27 2012
 	* Improved the documentation wrt subscription id (RT#73060).
 	* Improved ActiveMQ failover URI support.

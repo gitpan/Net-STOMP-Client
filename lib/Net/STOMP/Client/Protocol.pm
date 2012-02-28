@@ -13,8 +13,8 @@
 package Net::STOMP::Client::Protocol;
 use strict;
 use warnings;
-our $VERSION  = "1.4";
-our $REVISION = sprintf("%d.%02d", q$Revision: 1.15 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.5";
+our $REVISION = sprintf("%d.%02d", q$Revision: 1.16 $ =~ /(\d+)\.(\d+)/);
 
 #
 # export control
@@ -266,15 +266,18 @@ foreach my $field (qw(originBrokerId originBrokerName originBrokerURL orignalMes
 }
 
 #
-# Apollo extensions to STOMP (http://activemq.apache.org/apollo/versions/1.0-SNAPSHOT/website/documentation/user-manual.html)
+# Apollo extensions to STOMP (http://activemq.apache.org/apollo/versions/1.1-SNAPSHOT/website/documentation/user-manual.html)
 #
 
 $FieldFlags{ANY_VERSION()}{CONNECTED}{"user-id"} = FLAG_FIELD_OPTIONAL;
 $FieldFlags{ANY_VERSION()}{MESSAGE}{"browser"} = FLAG_FIELD_OPTIONAL;
-$FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"auto-delete"} = FLAG_FIELD_OPTIONAL_BOOLEAN;
+$FieldFlags{ANY_VERSION()}{SEND}{"retain"} = FLAG_FIELD_OPTIONAL;
 $FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"browser"} = FLAG_FIELD_OPTIONAL_BOOLEAN;
+$FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"browser-end"} = FLAG_FIELD_OPTIONAL_BOOLEAN;
 $FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"credit"} = FLAG_FIELD_OPTIONAL;
 $FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"exclusive"} = FLAG_FIELD_OPTIONAL_BOOLEAN;
+$FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"from-seq"} = FLAG_FIELD_OPTIONAL_INTEGER;
+$FieldFlags{ANY_VERSION()}{SUBSCRIBE}{"include-seq"} = FLAG_FIELD_OPTIONAL;
 
 #
 # RabbitMQ extensions to STOMP (http://www.rabbitmq.com/stomp.html)

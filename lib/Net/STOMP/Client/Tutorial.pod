@@ -91,6 +91,14 @@ stage. For instance with:
 At this point, the session has been established and you can now send and/or
 receive messages.
 
+=head2 GETTING SERVER INFORMATION
+
+Once connected at STOMP level, you can get information about the
+broker using the C<server> and C<version> methods. For instance:
+
+  printf("speaking STOMP %s with server %s\n",
+      $stomp->version(), $stomp->server() || "UNKNOWN");
+
 =head2 DISCONNECTING
 
 When you are done with messaging, you should gracefully end the session by
@@ -112,6 +120,8 @@ starts and ends a session, printing information along the way.
   printf("connected to broker %s (IP %s), port %d\n",
       $peer->host(), $peer->addr(), $peer->port());
   $stomp->connect();
+  printf("speaking STOMP %s with server %s\n",
+      $stomp->version(), $stomp->server() || "UNKNOWN");
   printf("session %s started\n", $stomp->session());
   $stomp->disconnect();
   printf("session ended\n");

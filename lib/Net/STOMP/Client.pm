@@ -13,8 +13,8 @@
 package Net::STOMP::Client;
 use strict;
 use warnings;
-our $VERSION  = "1.4";
-our $REVISION = sprintf("%d.%02d", q$Revision: 1.97 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.5";
+our $REVISION = sprintf("%d.%02d", q$Revision: 1.99 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -38,7 +38,7 @@ use Net::STOMP::Client::Protocol qw(FLAG_DIRECTION_C2S FLAG_DIRECTION_S2C);
 use Net::STOMP::Client::OO;
 our(@ISA) = qw(Net::STOMP::Client::OO);
 Net::STOMP::Client::OO::methods(qw(
-    uri host port timeout sockopts callbacks peer session
+    uri host port timeout sockopts callbacks peer server session
     client_heart_beat server_heart_beat
     _io _id _serial _receipts _version
 ));
@@ -169,6 +169,7 @@ sub new : method {
     $self->_serial(0);
     $self->_receipts({});
     $self->callbacks({});
+    $self->server("");
     $self->session("");
     return($self);
 }
@@ -583,6 +584,9 @@ sub _default_connected_callback ($$) {
 	$self->client_heart_beat(0);
 	$self->server_heart_beat(0);
     }
+    # record the server header
+    $value = $frame->header("server");
+    $self->server($value) if $value;
     # keep track of session id
     $value = $frame->header("session");
     # the session header is optional so we forge our own if it is missing
@@ -1061,8 +1065,8 @@ list of strings); this defaults to the list of all supported versions
 
 the Uniform Resource Identifier (URI) specifying where the STOMP
 service is and how to connect to it, this can be for instance
-C<tcp://msg01:6163> or something more complex such as
-C<failover:(ssl://msg01:6162,tcp://msg01:6163)>
+C<tcp://msg01:6163> or something more complex, see the L</"FAILOVER">
+section for more information
 
 =item C<host>
 
@@ -1101,7 +1105,26 @@ section for more information
 Upon object creation, a TCP connection is made to the server but no
 data (i.e. STOMP frame) is exchanged.
 
-=head1 SSL
+=head2 FAILOVER
+
+The C<uri> option of the new() method can be given a complex URI
+indicating some kind of failover, for instance:
+C<failover:(tcp://msg01:6163,tcp://msg02:6163)>.
+
+This must use the ActiveMQ syntax
+(see L<http://activemq.apache.org/failover-transport-reference.html>)
+and only some options are supported, namely: C<backOffMultiplier>,
+C<initialReconnectDelay>, C<maxReconnectAttempts>,
+C<maxReconnectDelay>, C<randomize> and C<useExponentialBackOff>.
+
+When specified, these failover options will be used only inside the
+new() method (so at the TCP connection level) and not elsewhere. If
+the broker later fails during the STOMP interaction, it is up to the
+program author, knowing the logic of his code, to perform the
+appropriate recovery actions and eventually reconnect, using again the
+new() method.
+
+=head2 SSL
 
 When creating an object with Net::STOMP::Client->new(), if you supply some
 socket options (via C<sockopts>) with a name starting with C<SSL_>,
@@ -1136,7 +1159,7 @@ private key
 
 For more information, see L<IO::Socket::SSL>.
 
-=head1 TIMEOUTS
+=head2 TIMEOUTS
 
 By default, when sending STOMP frames, the module waits until the
 frame indeed has been sent (from the socket point of view). In case
@@ -1276,6 +1299,11 @@ the connected STOMP server
 =item socket()
 
 return the file handle of the socket connecting the client and the server
+
+=item server()
+
+return the server header seen on the CONNECTED frame or the empty
+string if not seen
 
 =item session()
 

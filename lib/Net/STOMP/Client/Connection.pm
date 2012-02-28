@@ -13,8 +13,8 @@
 package Net::STOMP::Client::Connection;
 use strict;
 use warnings;
-our $VERSION  = "1.4";
-our $REVISION = sprintf("%d.%02d", q$Revision: 1.1 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.5";
+our $REVISION = sprintf("%d.%02d", q$Revision: 1.2 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -89,7 +89,8 @@ sub _new_high ($$$%) {
     while (1) {
 	@list = $option{randomize} ? shuffle(@$peers) : @$peers;
 	foreach $peer (@list) {
-	    $socket = _new_low($caller, $peer->proto(), $peer->host(), $peer->port(), %$sockopt);
+	    $socket = _new_low($caller, $peer->proto(), $peer->host(), $peer->port(),
+			       %$sockopt);
 	    if ($socket) {
 		# keep track of the address we are connected to
 		$peer->addr($socket->peerhost());
@@ -180,12 +181,14 @@ sub _new_uri ($$%) {
 	    $line = $3;
 	    $peers = _uris2peers($caller, split(/,/, $2));
 	    %option = (randomize => 1, sleep => 0.01, max_sleep => 30, multiplier => 2);
-	    $option{multiplier} = $2     if $line and $line =~ /\b(backOffMultiplier=(\d+(\.\d+)?))\b/;
-	    $option{multiplier} = 0      if $line and $line =~ /\b(useExponentialBackOff=false)\b/;
-	    $option{randomize} = 0       if $line and $line =~ /\b(randomize=false)\b/;
-	    $option{sleep} = $2/1000     if $line and $line =~ /\b(initialReconnectDelay=(\d+))\b/;
-	    $option{max_sleep} = $2/1000 if $line and $line =~ /\b(maxReconnectDelay=(\d+))\b/;
-	    $option{max_attempt} = $2+1  if $line and $line =~ /\b(maxReconnectAttempts=(\d+))\b/;
+	    if ($line) {
+		$option{multiplier} = $2 if $line =~ /\b(backOffMultiplier=(\d+(\.\d+)?))\b/;
+		$option{multiplier} = 0 if $line =~ /\b(useExponentialBackOff=false)\b/;
+		$option{randomize} = 0 if $line =~ /\b(randomize=false)\b/;
+		$option{sleep} = $2/1000 if $line =~ /\b(initialReconnectDelay=(\d+))\b/;
+		$option{max_sleep} = $2/1000 if $line =~ /\b(maxReconnectDelay=(\d+))\b/;
+		$option{max_attempt} = $2+1 if $line =~ /\b(maxReconnectAttempts=(\d+))\b/;
+	    }
 	    last;
 	} elsif ($uri =~ /^failover:([\w\.\-\:\/\,]+)$/) {
 	    # failover without options
