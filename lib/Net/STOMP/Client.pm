@@ -13,8 +13,8 @@
 package Net::STOMP::Client;
 use strict;
 use warnings;
-our $VERSION  = "1.5";
-our $REVISION = sprintf("%d.%02d", q$Revision: 1.99 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.6";
+our $REVISION = sprintf("%d.%03d", q$Revision: 1.101 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -72,22 +72,24 @@ sub _timeout : method {
 	} else {
 	    # scalar timeout specified -> backward compatibility
 	    $timeout = {
-		connect   => $timeout,
-		connected => $timeout,
-		send      => undef,
-		receive   => undef,
+		connect    => $timeout,
+		connected  => $timeout,
+		disconnect => $timeout,
+		send       => undef,
+		receive    => undef,
 	    };
 	}
     } else {
 	# no timeout specified -> use hard-coded defaults
 	$timeout = {
-	    connect   => undef,
-	    connected => 10,
-	    send      => undef,
-	    receive   => undef,
+	    connect    => undef,
+	    connected  => 10,
+	    disconnect => 10,
+	    send       => undef,
+	    receive    => undef,
 	};
     }
-    unless ($operation =~ /^(connect|connected|receive|send)$/) {
+    unless ($operation =~ /^(connect|connected|disconnect|receive|send)$/) {
 	Net::STOMP::Client::Error::report
 	    ("%s: unexpected timeout operation: %s", "Net::STOMP::Client", $operation);
 	return();
@@ -764,6 +766,13 @@ sub disconnect : method {
 	headers => \%option,
     );
     $self->send_frame($frame, $timeout) or return();
+    # if a receipt has been given, wait for it!
+    if ($option{receipt}) {
+	$self->wait_for_frames(
+	    timeout  => $self->_timeout("disconnect"),
+	    callback => sub { return(! $self->_receipts()->{$option{receipt}}) },
+	);
+    }
     # additional bookkeeping
     $self->session("");
     $self->peer(undef);
@@ -1182,6 +1191,12 @@ L<IO::Socket::INET> or L<IO::Socket::SSL> object (default: none)
 
 timeout used while waiting for the initial CONNECTED frame from the
 broker (default: 10)
+
+=item disconnect
+
+timeout specifying how long the disconnect() method should wait for a
+RECEIPT frame back in case the DISCONNECT frame contained a receipt
+(default: 10)
 
 =item receive
 

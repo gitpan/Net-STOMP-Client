@@ -13,8 +13,8 @@
 package Net::STOMP::Client::Frame;
 use strict;
 use warnings;
-our $VERSION  = "1.5";
-our $REVISION = sprintf("%d.%02d", q$Revision: 1.51 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.6";
+our $REVISION = sprintf("%d.%02d", q$Revision: 1.54 $ =~ /(\d+)\.(\d+)/);
 
 #
 # Object Oriented definition
@@ -273,6 +273,7 @@ sub decode ($%) {
     if (length($temp)) {
 	# optionally handle UTF-8 header decoding
 	if ($UTF8Header or (not defined($UTF8Header) and $v1_1)) {
+	    local $@; # preserve $@!
 	    $temp = Encode::decode("UTF-8", $temp, $fb);
 	}
 	if ($v1_1) {
@@ -317,6 +318,7 @@ sub decode ($%) {
     # optionally handle body decoding
     if ($BodyEncode or (not defined($BodyEncode) and $v1_1)) {
 	$value = _encoding($headers->{"content-type"});
+	local $@; # preserve $@!
 	$temp = Encode::decode($value, $temp, $fb) if $value;
     }
     $frame->body_reference(\$temp);
@@ -347,6 +349,7 @@ sub encode : method {
     # optionally handle body encoding (before content-length handling)
     if ($BodyEncode or (not defined($BodyEncode) and $v1_1)) {
 	$string = _encoding($headers->{"content-type"});
+	local $@; # preserve $@!
 	$body = Encode::encode($string, $body, $fb) if $string;
     }
 
@@ -362,23 +365,27 @@ sub encode : method {
 	    unless $body eq "";
     }
 
-    # encode the command and header
-    $string = "";
-    while (($key, $value) = each(%$headers)) {
-	next if $key eq "content-length";
-	if ($v1_1) {
-	    # handle backslash escaping
-	    $key   =~ s/([\x0a\x3a\x5c])/$_EncMap{$1}/eg;
-	    $value =~ s/([\x0a\x3a\x5c])/$_EncMap{$1}/eg;
-	}
-	$string .= $key . ":" . $value . "\n";
+    # encode the header
+    if ($v1_1) {
+	# with backslash escaping
+	$string = join("\n", map({
+	    ($key = $_)               =~ s/([\x0a\x3a\x5c])/$_EncMap{$1}/eg;
+	    ($value = $headers->{$_}) =~ s/([\x0a\x3a\x5c])/$_EncMap{$1}/eg;
+	    "${key}:${value}";
+	} grep($_ ne "content-length", keys(%$headers))), "");
+    } else {
+	# without backslash escaping
+	$string = join("\n", map({
+	    "${_}:$headers->{$_}";
+	} grep($_ ne "content-length", keys(%$headers))), "");
     }
     if (defined($content_length)) {
-	$string .= "content-length:" . $content_length . "\n";
+	$string .= "content-length:${content_length}\n";
     }
 
     # optionally handle UTF-8 header encoding
     if ($UTF8Header or (not defined($UTF8Header) and $v1_1)) {
+	local $@; # preserve $@!
 	$string = Encode::encode("UTF-8", $string, $fb);
     }
 
@@ -393,7 +400,7 @@ sub encode : method {
     }
 
     # assemble all the parts
-    $value = $self->command() . "\n" . $string . "\n" . $body . "\0";
+    $value = $self->command() . "\n${string}\n${body}\0";
 
     # return a reference to the encoded frame
     return(\$value);
@@ -423,7 +430,7 @@ sub _debug_header ($) {
 	    if ($char == 0x0a) {
 		# end of header line
 		last;
-	    } elsif (0x20 <= $char and $char <= 0x7e and $char != 0x25) {
+	    } elsif (0x20 < $char and $char <= 0x7e and $char != 0x25) {
 		# printable
 		$line .= sprintf("%c", $char);
 	    } else {

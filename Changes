@@ -1,5 +1,10 @@
 Revision history for Net-STOMP-Client:
 
+1.6	Mon Jun 25 2012
+	* Net::STOMP::Client::Frame: minor encoding speed improvements.
+	* Net::STOMP::Client: the disconnect() method now handles receipts.
+	* Preserve $@ when calling Encode::encode() or Encode::decode().
+
 1.5	Tue Feb 28 2012
 	* Improved the documentation wrt failover support id (RT#74738).
 	* Added a server() method to access the CONNECTED frame's server header.
