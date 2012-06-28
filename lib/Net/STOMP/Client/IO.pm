@@ -13,8 +13,8 @@
 package Net::STOMP::Client::IO;
 use strict;
 use warnings;
-our $VERSION  = "1.6";
-our $REVISION = sprintf("%d.%02d", q$Revision: 1.26 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.6_2";
+our $REVISION = sprintf("%d.%02d", q$Revision: 1.28 $ =~ /(\d+)\.(\d+)/);
 
 #
 # Object Oriented definition
@@ -37,7 +37,7 @@ use Time::HiRes qw();
 # constants
 #
 
-use constant MAX_CHUNK => 8192;
+use constant MAX_CHUNK => 32768;
 
 #
 # constructor
@@ -59,6 +59,7 @@ sub new : method {
     $self->{_outgoing_buffer} = "";
     $self->{_outgoing_queue} = [];
     $self->{_outgoing_length} = 0;
+    $self->{_ssl} = $socket->isa("IO::Socket::SSL");
     return($self);
 }
 
@@ -94,14 +95,11 @@ sub DESTROY {
 
     $socket = $self->_socket();
     if ($socket) {
-	if (ref($socket) eq "IO::Socket::INET") {
-	    # this is a plain INET socket: we call shutdown() without checking
-	    # if it fails as there is not much that can be done about it...
-	    $ignored = shutdown($socket, 2);
-	} else {
-	    # this must be an IO::Socket::SSL object so it is better not
-	    # to call shutdown(), see IO::Socket::SSL's man page for more info
-	}
+	# call shutdown() without checking if it fails or not since there is
+	# not much that can be done in case of failure... unless we use SSL
+	# for which it is better not to call shutdown(), see IO::Socket::SSL's
+	# man page for more information
+	$ignored = shutdown($socket, 2) unless $self->{_ssl};
 	# the following will cleanly auto-close the socket
 	$self->_socket(undef);
     }
@@ -188,7 +186,10 @@ sub _sock2buf : method {
 	return(0) unless $timeout > 0;
     }
     # use select() to check if we can read something
-    return(0) unless $self->_select()->can_read($timeout);
+    unless ($self->_select()->can_read($timeout)) {
+	# in case of SSL we also check what is pending
+	return(0) unless $self->{_ssl} and $self->_socket()->pending();
+    }
     # try to read, once only since we do not know when to stop...
     $count = sysread($self->_socket(), $self->{_incoming_buffer}, MAX_CHUNK,
 		     length($self->{_incoming_buffer}));

@@ -1,5 +1,9 @@
 Revision history for Net-STOMP-Client:
 
+???	???
+	* Improved SSL support by handling situations where select()
+	  claims that there is nothing to read although there is.
+
 1.6	Mon Jun 25 2012
 	* Net::STOMP::Client::Frame: minor encoding speed improvements.
 	* Net::STOMP::Client: the disconnect() method now handles receipts.
