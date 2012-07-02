@@ -13,7 +13,7 @@
 package Net::STOMP::Client::IO;
 use strict;
 use warnings;
-our $VERSION  = "1.6_2";
+our $VERSION  = "1.7";
 our $REVISION = sprintf("%d.%02d", q$Revision: 1.28 $ =~ /(\d+)\.(\d+)/);
 
 #
