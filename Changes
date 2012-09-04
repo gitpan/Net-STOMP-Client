@@ -1,5 +1,9 @@
 Revision history for Net-STOMP-Client:
 
+???	???
+	* Ignore I/O errors after we have successfully sent the DISCONNECT frame.
+	* Added support for non-blocking I/O, this is now the default I/O mode.
+
 1.7	Mon Jul  2 2012
 	* Improved SSL support by handling situations where select()
 	  claims that there is nothing to read although there is.

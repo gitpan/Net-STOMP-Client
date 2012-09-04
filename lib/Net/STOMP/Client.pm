@@ -13,8 +13,8 @@
 package Net::STOMP::Client;
 use strict;
 use warnings;
-our $VERSION  = "1.7";
-our $REVISION = sprintf("%d.%03d", q$Revision: 1.101 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.7_5";
+our $REVISION = sprintf("%d.%03d", q$Revision: 1.103 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -39,7 +39,7 @@ use Net::STOMP::Client::OO;
 our(@ISA) = qw(Net::STOMP::Client::OO);
 Net::STOMP::Client::OO::methods(qw(
     uri host port timeout sockopts callbacks peer server session
-    client_heart_beat server_heart_beat
+    client_heart_beat server_heart_beat blocking_io
     _io _id _serial _receipts _version
 ));
 
@@ -161,7 +161,7 @@ sub new : method {
 	$self->host($peer->host());
 	$self->port($peer->port());
     }
-    $io = Net::STOMP::Client::IO->new($socket) or return();
+    $io = Net::STOMP::Client::IO->new($socket, $self->blocking_io()) or return();
     $self->_io($io);
     unless ($self =~ /\(0x(\w+)\)/) {
 	Net::STOMP::Client::Error::report("%s: unexpected Perl object: %s", $me, $self);
@@ -768,6 +768,9 @@ sub disconnect : method {
     $self->send_frame($frame, $timeout) or return();
     # if a receipt has been given, wait for it!
     if ($option{receipt}) {
+	# at this point the server may abruptly close the socket without lingering
+	# so we ignore I/O errors while we wait for the receipt to come back
+	local $Net::STOMP::Client::Error::Die = 0;
 	$self->wait_for_frames(
 	    timeout  => $self->_timeout("disconnect"),
 	    callback => sub { return(! $self->_receipts()->{$option{receipt}}) },
@@ -1108,6 +1111,11 @@ section for more information
 
 the desired server-side heart-beat setting, see the L</"HEART-BEATING">
 section for more information
+
+=item C<blocking_io>
+
+true if the module should use blocking I/O, see L<Net::STOMP::Client::IO>
+for more information (default: false)
 
 =back
 
