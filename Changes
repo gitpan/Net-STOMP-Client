@@ -1,6 +1,6 @@
 Revision history for Net-STOMP-Client:
 
-???	???
+1.8	Thu Sep 27 2012
 	* Ignore I/O errors after we have successfully sent the DISCONNECT frame.
 	* Added support for non-blocking I/O, this is now the default I/O mode.
 
