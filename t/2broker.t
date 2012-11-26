@@ -45,7 +45,7 @@ sub test_connect () {
     $option{passcode} = $ENV{PNSCT_PASSCODE} if defined($ENV{PNSCT_PASSCODE});
     $stomp->connect(%option);
     ok($stomp->session(), "connect");
-    is($stomp->receipts(), 0, "connect -> no receipts");
+    is(scalar($stomp->receipts()), 0, "connect -> no receipts");
 }
 
 # test disconnect
@@ -70,23 +70,23 @@ sub test_noop () {
     $option{transaction} = $tid;
     $option{receipt} = $stomp->uuid();
     $stomp->begin(%option);
-    is($stomp->receipts(), 1, "begin -> one receipt");
+    is(scalar($stomp->receipts()), 1, "begin -> one receipt");
 
     %option = ();
     $option{timeout} = TIMEOUT;
     $stomp->wait_for_receipts(%option);
-    is($stomp->receipts(), 0, "wait_for_receipts -> no receipts");
+    is(scalar($stomp->receipts()), 0, "wait_for_receipts -> no receipts");
 
     %option = ();
     $option{transaction} = $tid;
     $option{receipt} = $stomp->uuid();
     $stomp->abort(%option);
-    is($stomp->receipts(), 1, "abort -> one receipt");
+    is(scalar($stomp->receipts()), 1, "abort -> one receipt");
 
     %option = ();
     $option{timeout} = TIMEOUT;
     $stomp->wait_for_receipts(%option);
-    is($stomp->receipts(), 0, "wait_for_receipts -> no receipts");
+    is(scalar($stomp->receipts()), 0, "wait_for_receipts -> no receipts");
 }
 
 # test subscribe+send+unsubscribe, without receipts
@@ -144,7 +144,7 @@ sub test_loopback () {
     $stomp->unsubscribe(%option);
     ok(1, "unsubscribe");
 
-    is($stomp->receipts(), 0, "loopback test -> no receipts");
+    is(scalar($stomp->receipts()), 0, "loopback test -> no receipts");
 }
 
 #

@@ -26,7 +26,7 @@ $frame = test(1, command => "SEND");
 $frame = test(1, headers => {});
 $frame = test(1, body => "hello");
 is($frame->body(), "hello", "body check");
-$frame = test(1, body_reference => \"hello");
+$frame = test(1, body_reference => \ "hello");
 is($frame->body(), "hello", "body_reference check");
 $frame = test(1, command => "SEND", body => "hello");
 

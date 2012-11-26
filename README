@@ -32,7 +32,13 @@ After installing, you can find documentation for this module with the
 perldoc command.
 
     perldoc Net::STOMP::Client
+    perldoc Net::STOMP::Client::Connection
     perldoc Net::STOMP::Client::Frame
+    perldoc Net::STOMP::Client::HeartBeat
+    perldoc Net::STOMP::Client::IO
+    perldoc Net::STOMP::Client::Peer
+    perldoc Net::STOMP::Client::Receipt
+    perldoc Net::STOMP::Client::Version
 
 You can find some examples in the eg directory and a detailed tutorial:
 

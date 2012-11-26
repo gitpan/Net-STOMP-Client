@@ -39,11 +39,11 @@ printf("connected to %s:%d using STOMP %s\n",
 # sending messages
 
 $Start = time();
-foreach (1 .. $Option{count}) {
+foreach my $i (1 .. $Option{count}) {
     $Conn->send(
-	destination => $Option{destination},
-	persistent  => "true",
-	body        => "Hello world from Perl",
+        destination => $Option{destination},
+        persistent  => "true",
+        body        => "Hello world from Perl",
     );
 }
 printf("sent %d messages in %.3f seconds\n", $Option{count}, time()-$Start);

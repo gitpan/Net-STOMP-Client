@@ -4,17 +4,17 @@ Net::STOMP::Client::Tutorial - Getting started with STOMP and Net::STOMP::Client
 
 =head1 INTRODUCTION
 
-Here is a five-parts tutorial to get started with Net::STOMP::Client.
+Here is a five-parts tutorial to get started with L<Net::STOMP::Client>.
 
 A basic knowledge of STOMP is required. For this, you can read:
 
 =over
 
-=item * L<http://stomp.github.com/stomp-specification-1.1.html>
+=item * L<http://stomp.github.com/stomp-specification-1.2.html>
 
-the STOMP 1.1 protocol specification
+the STOMP 1.2 protocol specification
 
-=item * L<http://fusesource.com/docs/broker/5.4/connectivity_guide/BHIJBDJH.html>
+=item * L<http://fusesource.com/docs/broker/5.5/connectivity_guide/FMBConnectivityStompTelnet.html>
 
 the Fuse Message Broker STOMP Tutorial
 
@@ -22,7 +22,7 @@ the Fuse Message Broker STOMP Tutorial
 
 =head1 PART 1: CONNECTING TO A BROKER
 
-Net::STOMP::Client, like similar modules under the Net::* hierarchy,
+L<Net::STOMP::Client>, like similar modules under the Net::* hierarchy,
 provides an object oriented interface to a network protocol.
 
 =head2 CREATING AN OBJECT
@@ -47,7 +47,7 @@ or with the pair of C<host> and C<port> parameters:
 =head2 USING SSL
 
 Using SSL is more complex since more parameters have to be given. Note:
-IO::Socket::SSL is used behind the scene so you can refer to its
+L<IO::Socket::SSL> is used behind the scene so you can refer to its
 documentation for more information. Here is how this could be done:
 
   $stomp = Net::STOMP::Client->new(
@@ -93,8 +93,8 @@ receive messages.
 
 =head2 GETTING SERVER INFORMATION
 
-Once connected at STOMP level, you can get information about the
-broker using the C<server> and C<version> methods. For instance:
+Once connected at STOMP level, you can get information about the broker
+using the C<server> and C<version> methods. For instance:
 
   printf("speaking STOMP %s with server %s\n",
       $stomp->version(), $stomp->server() || "UNKNOWN");
@@ -130,7 +130,8 @@ starts and ends a session, printing information along the way.
 
 =head2 SENDING MESSAGES
 
-A message is made of a header (a list of key/value pairs) and a body. Both are optional.
+A message is made of a header (a list of key/value pairs) and a body. Both
+are optional.
 
 To send a message, you have to issue a C<SEND> frame. For instance:
 
@@ -147,7 +148,7 @@ By default, you do not get any confirmation that the message has indeed been
 received by the broker. If you want such a confirmation, you have to use
 receipts. The following code snippet sends two messages with a C<receipt>
 header containing a pseudo-unique id and waits for matching C<RECEIPT>
-frames coming from the broker. This is easy because the Net::STOMP::Client
+frames coming from the broker. This is easy because the L<Net::STOMP::Client>
 module keeps track of which receipts are expected and have not been received
 yet.
 
@@ -217,8 +218,8 @@ It is good practice to add an C<id> header to uniquely identify the
 subscription. All messages part of this subscription will have a matching
 C<subscription> header. This C<id> can also be used to unsubscribe.
 
-In fact, the code above only works with STOMP 1.0. In STOMP 1.1, the
-C<id> header has been made mandatory so you must use something like:
+In fact, the code above only works with STOMP 1.0. In STOMP 1.1 and above,
+the C<id> header has been made mandatory so you must use something like:
 
   $stomp->subscribe(
       destination => "/queue/test",
@@ -289,16 +290,16 @@ messages from to C</queue/test>:
   while ($count < 10) {
       $frame = $stomp->wait_for_frames(timeout => 1);
       if ($frame) {
-  	if ($frame->command() eq "MESSAGE") {
-  	    $count++;
-  	    printf("received message %d with id %s\n",
-  		   $count, $frame->header("message-id"));
-  	} else {
-            # this will catch the RECEIPT frame
-  	    printf("%s frame received\n", $frame->command());
-  	}
+          if ($frame->command() eq "MESSAGE") {
+              $count++;
+              printf("received message %d with id %s\n",
+                     $count, $frame->header("message-id"));
+          } else {
+              # this will catch the RECEIPT frame
+              printf("%s frame received\n", $frame->command());
+          }
       } else {
-  	print("waiting for messages...\n");
+          print("waiting for messages...\n");
       }
   }
   $stomp->unsubscribe(id => $sid);
@@ -310,16 +311,16 @@ As seen in part 3, because of the asynchronous nature of STOMP, it is a bit
 tricky to properly handle all the different types of frames that can be
 received.
 
-In order to simplify this, Net::STOMP::Client supports the use of
-callbacks. They are pieces of code called in well defined situations.
-In fact, there are two levels of callbacks: global and local.
+In order to simplify this, L<Net::STOMP::Client> supports the use of
+callbacks. They are pieces of code called in well defined situations.  In
+fact, there are two levels of callbacks: global and local.
 
 =head2 GLOBAL CALLBACKS
 
 Global (per command) callbacks are called each time a frame is received.
-Net::STOMP::Client has default callbacks that should be sufficient for all
-types of frames, except for C<MESSAGE> frames. For these, it is really up to
-the coder to define what he wants to do with the received messages.
+L<Net::STOMP::Client> has default callbacks that should be sufficient for
+all types of frames, except for C<MESSAGE> frames. For these, it is really
+up to the coder to define what he wants to do with the received messages.
 
 Here is an example with a message callback counting the messages received:
 
@@ -355,8 +356,6 @@ Local (per invocation) callbacks are called by the C<wait_for_frame> method.
 Their return value control what C<wait_for_frame> does:
 
 =over
-
-=item * C<undef>: an error occured
 
 =item * false: C<wait_for_frame> should wait for more frames
 
@@ -444,27 +443,32 @@ a C<message-id> header matching the one of the received message:
 
   $stomp->ack("message-id" => $frame->header("message-id"));
 
-In fact, you can directly pass the frame that holds the received message and
-Net::STOMP::Client will extract the C<message-id> for you:
+In practice, this is more complex since the exact way to acknowledge messages
+changed between STOMP 1.0 (only C<message-id> required), STOMP 1.1 (both
+C<message-id> and C<subscription> required) and STOMP 1.2 (only C<id> required).
+
+L<Net::STOMP::Client> has a unique feature to ease acknowledgments: you can
+directly pass the frame that holds the received message and the module will
+properly acknowledge, it regardless of the STOMP protocol version used:
 
   $stomp->ack(frame => $frame);
 
-Messages that have not be acknowledged by the end of the session will be
+Messages that have not been acknowledged by the end of the session will be
 resent by the broker.
 
-Note that STOMP 1.1 also has a C<client-individual> mode. Please
-consult the protocol specification for more details.
+Note that starting with STOMP 1.1 also has a C<client-individual> mode.
+Please consult the protocol specification for more details.
 
 =head2 EFFICIENT I/O
 
-The high-level methods handle one frame at a time. This can be
-inefficient for small frames. For instance, the C<send> method will
-build a frame object, encode it and send it on the wire with at least
-one call to C<syswrite>, maybe for very few bytes.
+The high-level methods handle one frame at a time. This can be inefficient
+for small frames. For instance, the C<send> method will build a frame
+object, encode it and send it on the wire with at least one call to
+C<syswrite>, maybe for very few bytes.
 
-The low-level methods allow you to better control this and queue
-messages in memory before sending them. This way, you group data and
-use I/O more efficiently.
+The low-level methods allow you to better control this and queue messages in
+memory before sending them. This way, you group data and use I/O more
+efficiently.
 
 Here is how to queue ten messages and send them in one go.
 
@@ -484,11 +488,12 @@ Here is how to queue ten messages and send them in one go.
 
 L<IO::Socket::SSL>,
 L<Net::STOMP::Client>,
-L<Net::STOMP::Client::Debug>,
-L<Net::STOMP::Client::Error>,
+L<Net::STOMP::Client::Connection>,
 L<Net::STOMP::Client::Frame>,
-L<Net::STOMP::Client::OO>,
-L<Net::STOMP::Client::Peer>.
+L<Net::STOMP::Client::HeartBeat>,
+L<Net::STOMP::Client::Peer>,
+L<Net::STOMP::Client::Receipt>,
+L<Net::STOMP::Client::Version>.
 
 =head1 AUTHOR
 

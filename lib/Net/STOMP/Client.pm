@@ -13,460 +13,75 @@
 package Net::STOMP::Client;
 use strict;
 use warnings;
-our $VERSION  = "1.8";
-our $REVISION = sprintf("%d.%03d", q$Revision: 1.103 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.9_1";
+our $REVISION = sprintf("%d.%02d", q$Revision: 2.0 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
 #
 
-use IO::Socket::INET;
-use List::Util qw(max);
+use Net::STOMP::Client::Connection qw();
+use Net::STOMP::Client::Frame qw();
+use Net::STOMP::Client::HeartBeat qw(*);
+use Net::STOMP::Client::IO qw();
+use Net::STOMP::Client::Peer qw();
+use Net::STOMP::Client::Receipt qw(*);
+use Net::STOMP::Client::Version qw(*);
+use No::Worries::Die qw(dief);
+use No::Worries::Log qw(log_debug);
+use Params::Validate qw(validate :types);
 use Time::HiRes qw();
-use Net::STOMP::Client::Connection;
-use Net::STOMP::Client::Debug;
-use Net::STOMP::Client::Error;
-use Net::STOMP::Client::Frame;
-use Net::STOMP::Client::IO;
-use Net::STOMP::Client::Peer;
-use Net::STOMP::Client::Protocol qw(FLAG_DIRECTION_C2S FLAG_DIRECTION_S2C);
-
-#
-# Object Oriented definition
-#
-
-use Net::STOMP::Client::OO;
-our(@ISA) = qw(Net::STOMP::Client::OO);
-Net::STOMP::Client::OO::methods(qw(
-    uri host port timeout sockopts callbacks peer server session
-    client_heart_beat server_heart_beat blocking_io
-    _io _id _serial _receipts _version
-));
 
 #
 # global variables
 #
 
 our(
-    %Callback,			# default callbacks for the class
+    $Debug,  # default debug string
+    %Hook,   # registered hooks
 );
 
 #+++############################################################################
 #                                                                              #
-# low-level API                                                                #
+# timeout handling                                                             #
 #                                                                              #
 #---############################################################################
 
 #
-# return which timeout to use for the given operation
+# check the timeout attribute and convert it to its expanded form
 #
 
-sub _timeout : method {
-    my($self, $operation) = @_;
+sub _check_timeout ($) {
+    my($self) = @_;
     my($timeout);
 
-    $timeout = $self->timeout();
-    if ($timeout) {
-	if (ref($timeout) eq "HASH") {
-	    # hash timeout specified -> use it as is
-	} else {
-	    # scalar timeout specified -> backward compatibility
-	    $timeout = {
-		connect    => $timeout,
-		connected  => $timeout,
-		disconnect => $timeout,
-		send       => undef,
-		receive    => undef,
-	    };
-	}
-    } else {
-	# no timeout specified -> use hard-coded defaults
-	$timeout = {
-	    connect    => undef,
-	    connected  => 10,
-	    disconnect => 10,
-	    send       => undef,
-	    receive    => undef,
-	};
-    }
-    unless ($operation =~ /^(connect|connected|disconnect|receive|send)$/) {
-	Net::STOMP::Client::Error::report
-	    ("%s: unexpected timeout operation: %s", "Net::STOMP::Client", $operation);
-	return();
-    }
-    return($timeout->{$operation});
-}
-
-#
-# check the version option
-#
-
-sub _check_version ($$) {
-    my($me, $version) = @_;
-    my(@list);
-
-    if (defined($version)) {
-	if (ref($version) eq "ARRAY") {
-	    @list = sort(@$version);
-	} else {
-	    @list = ($version);
-	}
-    } else {
-	# default versions to use
-	@list = qw(1.0 1.1);
-    }
-    unless (@list) {
-	Net::STOMP::Client::Error::report("%s: empty list of STOMP versions given", $me);
-	return();
-    }
-    foreach $version (@list) {
-	unless ($version =~ /^1\.[01]$/) {
-	    Net::STOMP::Client::Error::report
-		("%s: unsupported STOMP version: %s", $me, $version);
-	    return();
-	}
-    }
-    # modify the given version argument
-    $_[1] = \@list;
-    return(1);
-}
-
-#
-# create a new Net::STOMP::Client object and connect to the server (socket level only)
-#
-
-sub new : method {
-    my($class, %data) = @_;
-    my($me, $self, %sockopts, $timeout, $peer, $socket, $io, $version);
-
-    $me = "Net::STOMP::Client->new()";
-    $version = delete($data{version});
-    $self = $class->SUPER::new(%data);
-    _check_version($me, $version) or return();
-    $self->_version($version);
-    %sockopts = %{ $self->sockopts() } if $self->sockopts();
-    $sockopts{SSL_use_cert} = 1 if $sockopts{SSL_cert_file} or $sockopts{SSL_key_file};
-    unless (exists($sockopts{Timeout})) {
-	$timeout = $self->_timeout("connect");
-	$sockopts{Timeout} = $timeout if $timeout;
-    }
-    ($socket, $peer) = Net::STOMP::Client::Connection::_new
-	($me, $self->host(), $self->port(), $self->uri(), %sockopts);
-    return() unless $socket;
-    $self->peer($peer);
-    # final setup steps
-    if ($self->uri()) {
-	# keep track of the peer this way too...
-	$peer = $self->peer();
-	$self->host($peer->host());
-	$self->port($peer->port());
-    }
-    $io = Net::STOMP::Client::IO->new($socket, $self->blocking_io()) or return();
-    $self->_io($io);
-    unless ($self =~ /\(0x(\w+)\)/) {
-	Net::STOMP::Client::Error::report("%s: unexpected Perl object: %s", $me, $self);
-	return();
-    }
-    $self->_id(sprintf("%s-%x-%x-%x", $1, time(), $$, int(rand(65536))));
-    $self->_serial(0);
-    $self->_receipts({});
-    $self->callbacks({});
-    $self->server("");
-    $self->session("");
-    return($self);
-}
-
-#
-# expose the incoming buffer reference
-#
-
-sub incoming_buffer_reference : method {
-    my($self) = @_;
-
-    return($self->_io()->incoming_buffer_reference());
-}
-
-#
-# expose the outgoing buffer length
-#
-
-sub outgoing_buffer_length : method {
-    my($self) = @_;
-
-    return($self->_io()->outgoing_buffer_length());
-}
-
-#
-# queue the given frame (the frame is always checked, this is currently a feature)
-#
-# if the frame has a "receipt" header, its value will be remembered, to be used
-# later in _default_receipt_callback() and/or wait_for_receipts()
-#
-
-sub queue_frame : method {
-    my($self, $frame) = @_;
-    my($version, $data, $receipt);
-
-    if (ref($frame)) {
-	# always check the sent frame if it's a real one
-	$version = $self->version();
-	$frame->check(
-	    version   => $version,
-	    direction => FLAG_DIRECTION_C2S,
-	) or return();
-	# keep track of receipts
-	$receipt = $frame->header("receipt");
-	$self->_receipts()->{$receipt}++ if $receipt;
-	# encode the frame
-	$data = $frame->encode(version => $version);
-    } else {
-	# handle the special NOOP frame (= newline) or an already encoded frame
-	$data = \$frame;
-    }
-    # queue what we have
-    return($self->_io()->queue_data($data));
-}
-
-#
-# send queued data
-#
-
-sub send_data : method {
-    my($self, $timeout) = @_;
-
-    # check that the I/O object is still usable
-    unless ($self->_io()) {
-	Net::STOMP::Client::Error::report
-	    ("Net::STOMP::Client->send_data(): lost connection");
-	return();
-    }
-    # handle the global send timeout
-    $timeout = $self->_timeout("send") unless defined($timeout);
-    # just do it
-    return($self->_io()->send_data($timeout));
-}
-
-#
-# send the given frame (i.e. queue and then send _all_ data)
-#
-
-sub send_frame : method {
-    my($self, $frame, $timeout) = @_;
-    my($result);
-
-    # queue the frame
-    $result = $self->queue_frame($frame);
-    return() unless defined($result);
-    # send queued data
-    $result = $self->send_data($timeout);
-    return() unless defined($result);
-    # make sure we sent _all_ data
-    if ($self->_io()->outgoing_buffer_length()) {
-	Net::STOMP::Client::Error::report
-	    ("Net::STOMP::Client->send_frame(): could not send all data!");
-	return();
-    }
-    # so far so good...
-    return($result);
-}
-
-#
-# receive data
-#
-
-sub receive_data : method {
-    my($self, $timeout) = @_;
-
-    # check that the I/O object is still usable
-    unless ($self->_io()) {
-	Net::STOMP::Client::Error::report
-	    ("Net::STOMP::Client->receive_data(): lost connection");
-	return();
-    }
-    # handle the global receive timeout
-    $timeout = $self->_timeout("receive") unless defined($timeout);
-    # just do it
-    return($self->_io()->receive_data($timeout));
-}
-
-#
-# try to receive one frame (the frame is always checked, this is currently a feature)
-#
-
-sub receive_frame : method {
-    my($self, $timeout) = @_;
-    my($maxtime, $version, $bufref, $state, $frame, $result, $remaining);
-
-    # keep track of time
-    $timeout = $self->_timeout("receive") unless defined($timeout);
-    $maxtime = Time::HiRes::time() + $timeout if defined($timeout);
-    # first try to use the incoming buffer
-    $version = $self->version();
-    $bufref = $self->_io()->incoming_buffer_reference();
-    $state = {};
-    $frame = Net::STOMP::Client::Frame::decode($bufref,
-        version => $version,
-	state   => $state,
-    );
-    return() unless defined($frame);
-    # if this fails, try to receive data until we are done
-    while (not $frame) {
-	# where are we with time?
-	if (not defined($timeout)) {
-	    # timeout = undef => blocking
-	} elsif ($timeout) {
-	    # timeout > 0 => try once more if not too late
-	    $remaining = $maxtime - Time::HiRes::time();
-	    return(0) if $remaining <= 0;
-	    $timeout = $remaining;
-	} else {
-	    # timeout = 0 => non-blocking
-	}
-	# receive more data
-	$result = $self->receive_data($timeout);
-	return($result) unless $result;
-	# do we have a complete frame now?
-	$frame = Net::STOMP::Client::Frame::decode($bufref,
-	    version => $version,
-	    state   => $state,
-	);
-	return() unless defined($frame);
-    }
-    # always check the received frame
-    $frame->check(
-	version   => $version,
-	direction => FLAG_DIRECTION_S2C,
-    ) or return();
-    # so far so good
-    return($frame);
-}
-
-#
-# wait for new frames and dispatch them (see POD for more information)
-#
-
-sub wait_for_frames : method {
-    my($self, %option) = @_;
-    my($callback, $timeout, $limit, $timeleft, $frame, $result, $now);
-
-    $callback = $option{callback};
-    $timeout = $option{timeout};
+    $timeout = $self->{"timeout"};
     if (defined($timeout)) {
-	$limit = Time::HiRes::time() + $timeout;
-	$timeleft = $timeout;
+        if (ref($timeout) eq "") {
+            # scalar timeout specified -> backward compatibility
+            $timeout = {
+                "connect"    => $timeout,
+                "connected"  => $timeout,
+                "disconnect" => $timeout,
+                "send"       => undef,
+                "receive"    => undef,
+            };
+        } elsif (ref($timeout) eq "HASH") {
+            # hash timeout specified -> use it as is
+        } else {
+            dief("unexpected timeout: %s", $timeout);
+        }
+    } else {
+        # no timeout specified -> use hard-coded defaults
+        $timeout = {
+            "connect"    => undef,
+            "connected"  => 10,
+            "disconnect" => 10,
+            "send"       => undef,
+            "receive"    => undef,
+        };
     }
-    while (1) {
-	$frame = $self->receive_frame($timeleft);
-	return() unless defined($frame);
-	if ($frame) {
-	    # we always call first the per-command callback
-	    $result = $self->dispatch_frame($frame);
-	    return() unless defined($result);
-	    if ($callback) {
-		# user callback: we stop if callback returns error or true or if once
-		$result = $callback->($self, $frame);
-		return($result) if not defined($result) or $result or $option{once};
-	    } else {
-		# no user callback: we stop on the first frame and return it
-		return($frame);
-	    }
-	}
-	# we check if we exceeded the timeout
-	if (defined($timeout)) {
-	    $now = Time::HiRes::time();
-	    return(0) if $now >= $limit;
-	    $timeleft = $limit - $now;
-	}
-    }
-    # not reached...
-    die("ooops!");
-}
-
-#
-# wait for all receipts to be received
-#
-
-sub wait_for_receipts : method {
-    my($self, %option) = @_;
-    my($callback);
-
-    return(0) unless $self->receipts();
-    $option{callback} = sub { return($self->receipts() == 0) };
-    return($self->wait_for_frames(%option));
-}
-
-#
-# return the socket used
-#
-
-sub socket : method {
-    my($self) = @_;
-
-    return($self->_io()->_socket());
-}
-
-#
-# return the negotiated protocol version (or undef if not negotiated yet)
-#
-
-sub version : method {
-    my($self) = @_;
-    my($version);
-
-    $version = $self->_version();
-    return($version) unless ref($version);
-    return(undef);
-}
-#
-# return a universal pseudo-unique id to be used in receipts and transactions
-#
-
-sub uuid : method {
-    my($self) = @_;
-
-    $self->_serial($self->_serial() + 1);
-    return(sprintf("%s-%x", $self->_id(), $self->_serial()));
-}
-
-#
-# return the list of not-yet-received receipts
-#
-
-sub receipts : method {
-    my($self) = @_;
-
-    return(keys(%{ $self->_receipts() }));
-}
-
-#
-# return the last time we received data
-#
-
-sub last_received : method {
-    my($self) = @_;
-
-    return($self->_io() ? $self->_io()->_last_read() : undef);
-}
-
-#
-# return the last time we sent data
-#
-
-sub last_sent : method {
-    my($self) = @_;
-
-    return($self->_io() ? $self->_io()->_last_write() : undef);
-}
-
-#
-# object destructor
-#
-
-sub DESTROY {
-    my($self) = @_;
-
-    # try to disconnect gracefully if possible
-    $self->disconnect() if $self->session() and $self->_io();
+    $self->{"timeout"} = $timeout;
 }
 
 #+++############################################################################
@@ -479,193 +94,503 @@ sub DESTROY {
 # user-friendly accessors for the callbacks
 #
 
-sub _any_callback : method {
+sub _any_callback ($$;$) {
     my($self, $command, $callback) = @_;
-    my($callbacks);
 
-    $callbacks = $self->callbacks() || {};
-    return($callbacks->{$command})
-	unless $callback;
-    $callbacks->{$command} = $callback;
-    $self->callbacks($callbacks);
-    return($callback);
+    return($self->{"callback"}{$command}) unless $callback;
+    $self->{"callback"}{$command} = $callback;
+    return($self);
 }
 
 sub connected_callback : method {
     my($self, $callback) = @_;
 
-    return($self->_any_callback("CONNECTED", $callback));
+    return(_any_callback($self, "CONNECTED", $callback));
 }
 
 sub error_callback : method {
     my($self, $callback) = @_;
 
-    return($self->_any_callback("ERROR", $callback));
+    return(_any_callback($self, "ERROR", $callback));
 }
 
 sub message_callback : method {
     my($self, $callback) = @_;
 
-    return($self->_any_callback("MESSAGE", $callback));
+    return(_any_callback($self, "MESSAGE", $callback));
 }
 
 sub receipt_callback : method {
     my($self, $callback) = @_;
 
-    return($self->_any_callback("RECEIPT", $callback));
+    return(_any_callback($self, "RECEIPT", $callback));
 }
 
 #
-# report an error about an unexpected server frame received
-#
-
-sub _unexpected_frame ($$) {
-    my($frame, $info) = @_;
-
-    $info ||= "?";
-    Net::STOMP::Client::Error::report
-	("unexpected %s frame received: %s", $frame->command(), $info);
-}
-
-#
-# default CONNECTED frame callback: keep track of the negotiated
-# protocol version as well as the session identifier
-#
-
-sub _default_connected_callback ($$) {
-    my($self, $frame) = @_;
-    my($value);
-
-    # report an error if we are already connected
-    if ($self->session()) {
-	_unexpected_frame($frame, "already connected");
-	return();
-    }
-    # STOMP 1.1: handle version negotiation
-    $value = $frame->header("version");
-    if ($value) {
-	if (grep($_ eq $value, @{ $self->_version() })) {
-	    $self->_version($value);
-	} else {
-	    _unexpected_frame($frame, "unexpected STOMP version: $value");
-	    return();
-	}
-    } else {
-	$value = "1.0";
-	if (grep($_ eq $value, @{ $self->_version() })) {
-	    $self->_version($value);
-	} else {
-	    _unexpected_frame($frame, "server only supports STOMP $value");
-	    return();
-	}
-    }
-    # STOMP 1.1: handle heart-beat negotiation
-    $value = $frame->header("heart-beat");
-    if ($value) {
-	if ($value =~ /^(\d+),(\d+)$/) {
-	    if ($self->client_heart_beat() and $2) {
-		# negotiated
-		$self->client_heart_beat(max($self->client_heart_beat(), $2 / 1000.0));
-	    } else {
-		# disabled
-		$self->client_heart_beat(0);
-	    }
-	    if ($self->server_heart_beat() and $1) {
-		# negotiated
-		$self->server_heart_beat(max($self->server_heart_beat(), $1 / 1000.0));
-	    } else {
-		# disabled
-		$self->server_heart_beat(0);
-	    }
-	} else {
-	    _unexpected_frame($frame, "unexpected heart-beat setting: $value");
-	    return();
-	}
-    } else {
-	# missing value -> disable
-	$self->client_heart_beat(0);
-	$self->server_heart_beat(0);
-    }
-    # record the server header
-    $value = $frame->header("server");
-    $self->server($value) if $value;
-    # keep track of session id
-    $value = $frame->header("session");
-    # the session header is optional so we forge our own if it is missing
-    $value ||= sprintf("sid-%s", $self->_id());
-    $self->session($value);
-    return($self);
-}
-$Callback{CONNECTED} = \&_default_connected_callback;
-
-#
-# default ERROR frame callback: report the error using Net::STOMP::Client::Error::report()
-#
-
-sub _default_error_callback ($$) {
-    my($self, $frame) = @_;
-
-    _unexpected_frame($frame, $frame->header("message"));
-    return();
-}
-$Callback{ERROR} = \&_default_error_callback;
-
-#
-# default MESSAGE frame callback: complain (this must be overwritten by the caller)
-#
-
-sub _default_message_callback ($$) {
-    my($self, $frame) = @_;
-
-    _unexpected_frame($frame, $frame->header("message-id"));
-    return();
-}
-$Callback{MESSAGE} = \&_default_message_callback;
-
-#
-# default RECEIPT frame callback: keep track of received receipts
-#
-# note: the send_frame() method keeps track of sent receipts
-#
-
-sub _default_receipt_callback ($$) {
-    my($self, $frame) = @_;
-    my($receipts, $id);
-
-    $receipts = $self->_receipts();
-    $id = $frame->header("receipt-id");
-    if ($receipts and $id and $receipts->{$id}) {
-	# good: this is an expected receipt
-	delete($receipts->{$id});
-	return($self);
-    }
-    _unexpected_frame($frame, $id);
-    return();
-}
-$Callback{RECEIPT} = \&_default_receipt_callback;
-
-#
-# dispatch one received frame, calling the appropriate callback
-# (either user supplied or per-class default)
+# dispatch one received frame, calling the appropriate callback if existing
 #
 
 sub dispatch_frame : method {
-    my($self, $frame) = @_;
-    my($command, $callbacks, $callback);
+    my($self, $frame, %option) = @_;
+    my($command, $callback);
 
     $command = $frame->command();
-    $callbacks = $self->callbacks() || {};
-    $callback = $callbacks->{$command} || $Callback{$command};
-    unless ($callback) {
-	_unexpected_frame($frame, "unexpected command");
-	return();
-    }
+    dief("unexpected %s frame received", $command)
+        unless $command =~ /^(CONNECTED|ERROR|MESSAGE|RECEIPT)$/;
+    $callback = $self->{"callback"}{$command};
+    return() unless $callback;
     return($callback->($self, $frame));
 }
 
 #+++############################################################################
 #                                                                              #
-# high-level API (each method matches a client command)                        #
+# hook handling                                                                #
+#                                                                              #
+#---############################################################################
+
+#
+# run all the hooks of the given frame
+#
+
+sub _run_hooks ($$) {
+    my($self, $frame) = @_;
+    my($command);
+
+    $command = $frame->command();
+    return unless $Hook{$command};
+    foreach my $name (sort(keys(%{ $Hook{$command} }))) {
+        $Hook{$command}{$name}->($self, $frame);
+    }
+}
+
+#
+# default CONNECT hook
+#
+
+$Hook{"CONNECT"}{"default"} = sub {
+    my($self, $frame) = @_;
+
+    # do nothing when only STOMP 1.0 is asked
+    return unless grep($_ ne "1.0", $self->accept_version());
+    # add the required host header if missing
+    $frame->header("host", $self->host())
+        unless defined($frame->header("host"));
+};
+
+#
+# default CONNECTED hook
+#
+
+$Hook{"CONNECTED"}{"default"} = sub {
+    my($self, $frame) = @_;
+    my($value);
+
+    # make sure we receive this frame only once!
+    dief("already connected") if $self->{"session"};
+    # keep track of session information
+    $value = $frame->header("session");
+    if ($value) {
+        # keep it only if true as it will be used elsewhere to check state
+        $self->{"session"} = $value;
+    } else {
+        # this header is optional but often used so we forge our own if needed
+        $self->{"session"} = sprintf("sid-%s", $self->{"id"});
+    }
+    # keep track of server information
+    $value = $frame->header("server");
+    $self->{"server"} = $value if defined($value) and length($value);
+};
+
+#+++############################################################################
+#                                                                              #
+# object constructor and destructor                                            #
+#                                                                              #
+#---############################################################################
+
+#
+# FIXME: compatibility hack for Net::STOMP::Client 1.x (to be removed one day)
+#
+
+sub _hacknew ($) {
+    my($option) = @_;
+
+    # version option to be replaced by accept_version
+    $option->{"accept_version"} = delete($option->{"version"})
+        if exists($option->{"version"});
+    # Net::STOMP::Client::Debug::Flags to be replaced by ???
+    if ($Net::STOMP::Client::Debug::Flags and not exists($option->{"debug"})) {
+        No::Worries::Log::log_filter("debug caller=~^Net::STOMP::Client")
+            unless No::Worries::Log::log_wants_debug();
+        $option->{"debug"} = "+";
+        $option->{"debug"} .= "api+"
+            if $Net::STOMP::Client::Debug::Flags & (1 << 0);
+        $option->{"debug"} .= "command+"
+            if $Net::STOMP::Client::Debug::Flags & (1 << 1);
+        $option->{"debug"} .= "header+"
+            if $Net::STOMP::Client::Debug::Flags & (1 << 2);
+        $option->{"debug"} .= "body+"
+            if $Net::STOMP::Client::Debug::Flags & (1 << 3);
+        $option->{"debug"} .= "io+"
+            if $Net::STOMP::Client::Debug::Flags & (1 << 4);
+    }
+}
+
+#
+# create a new Net::STOMP::Client object and connect to the server (socket level only)
+#
+
+my %new_options = (
+    "uri"               => { optional => 1, type => SCALAR },
+    "host"              => { optional => 1, type => SCALAR },
+    "port"              => { optional => 1, type => SCALAR },
+    "sockopts"          => { optional => 1, type => HASHREF },
+    "debug"             => { optional => 1, type => SCALAR },
+    "timeout"           => { optional => 1, type => UNDEF|SCALAR|HASHREF },
+    # from Net::STOMP::Client::HeartBeat
+    "client_heart_beat" => { optional => 1, type => SCALAR },
+    "server_heart_beat" => { optional => 1, type => SCALAR },
+    # from STOMP::Client::Version
+    "accept_version"    => { optional => 1, type => UNDEF|SCALAR|ARRAYREF },
+    "version"           => { optional => 1, type => UNDEF|SCALAR|ARRAYREF },
+);
+
+sub new : method {
+    my($class, %option, $self, %sockopts, %connopt, $timeout, $socket, $peer);
+
+    $class = shift(@_);
+    %option = validate(@_, \%new_options);
+    _hacknew(\%option);
+    $self = bless(\%option, $class);
+    if ($self =~ /\(0x(\w+)\)/) {
+        $self->{"id"} =
+            sprintf("%s-%x-%x-%x", $1, time(), $$, int(rand(65536)));
+    } else {
+        dief("unexpected Perl object: %s", $self);
+    }
+    # check the accept_version option (and set defaults)
+    $self->accept_version($option{"accept_version"});
+    # check the debug option (and set defaults)
+    $self->{"debug"} = $Debug unless exists($self->{"debug"});
+    # check the timeout option (and set defaults)
+    _check_timeout($self);
+    # check the sockopts option
+    %sockopts = %{ $self->{"sockopts"} } if $self->{"sockopts"};
+    $sockopts{SSL_use_cert} = 1
+        if $sockopts{SSL_cert_file} or $sockopts{SSL_key_file};
+    unless (exists($sockopts{Timeout})) {
+        $timeout = $self->{"timeout"}{"connect"};
+        $sockopts{Timeout} = $timeout if $timeout;
+    }
+    # connect (TCP level only)
+    $connopt{"debug"}   = $self->{"debug"} if defined($self->{"debug"});
+    $connopt{"host"}    = $self->{"host"}  if defined($self->{"host"});
+    $connopt{"port"}    = $self->{"port"}  if defined($self->{"port"});
+    $connopt{"uri"}     = $self->{"uri"}   if defined($self->{"uri"});
+    $connopt{"sockopt"} = \%sockopts       if keys(%sockopts);
+    ($socket, $peer) = Net::STOMP::Client::Connection::new(%connopt);
+    # bookkeeping
+    $self->{"peer"} = $peer;
+    if ($self->uri()) {
+        # keep track of the peer this way too...
+        $self->{"host"} = $peer->host();
+        $self->{"port"} = $peer->port();
+    }
+    $self->{"io"} = Net::STOMP::Client::IO->new($socket);
+    $self->{"serial"} = 1;
+    $self->{"callback"} = {
+        "ERROR" => sub {
+            my($_self, $_frame) = @_;
+            dief("unexpected ERROR frame received: %s",
+                 $_frame->header("message") || "?");
+        },
+    };
+    # so far so good!
+    return($self);
+}
+
+#
+# close the socket opened by new()
+#
+
+sub _close ($) {
+    my($self) = @_;
+    my($socket, $ignored);
+
+    # try to disconnect gracefully if possible
+    $self->disconnect() if $self->{"session"} and $self->{"io"};
+    # then destroy the I/O object while keeping a handle on the socket
+    $socket = $self->{"io"}{"socket"};
+    delete($self->{"io"});
+    # then maybe shutdown the socket (http://www.perlmonks.org/?node=108244)
+    if ($socket) {
+        # call shutdown() without checking if it fails or not since there is
+        # not much that can be done in case of failure... unless we use SSL
+        # for which it is better not to call shutdown(), see IO::Socket::SSL's
+        # man page for more information
+        $ignored = shutdown($socket, 2) unless $socket->isa("IO::Socket::SSL");
+    }
+    # the socket will auto-close when $socket gets destroyed
+}
+
+#
+# object destructor
+#
+
+sub DESTROY {
+    my($self) = @_;
+
+    _close($self);
+}
+
+#+++############################################################################
+#                                                                              #
+# accessors                                                                    #
+#                                                                              #
+#---############################################################################
+
+#
+# very simple-minded read-only accessors
+#
+
+sub host    : method { my($self) = @_; return($self->{"host"});    }
+sub peer    : method { my($self) = @_; return($self->{"peer"});    }
+sub port    : method { my($self) = @_; return($self->{"port"});    }
+sub server  : method { my($self) = @_; return($self->{"server"});  }
+sub session : method { my($self) = @_; return($self->{"session"}); }
+sub uri     : method { my($self) = @_; return($self->{"uri"});     }
+
+#
+# I/O-related read-only accessors
+#
+
+sub socket : method {  ## no critic 'ProhibitBuiltinHomonyms'
+    my($self) = @_;
+
+    return(undef) unless $self->{"io"};
+    return($self->{"io"}{"socket"});
+}
+
+sub incoming_buffer_reference : method {
+    my($self) = @_;
+
+    return(undef) unless $self->{"io"};
+    return(\$self->{"io"}{"incoming_buffer"});
+}
+
+sub outgoing_buffer_length : method {
+    my($self) = @_;
+
+    return(undef) unless $self->{"io"};
+    return($self->{"io"}{"outgoing_length"});
+}
+
+#
+# return a universal pseudo-unique id to be used in receipts and transactions
+#
+
+sub uuid : method {
+    my($self) = @_;
+
+    return(sprintf("%s-%x", $self->{"id"}, $self->{"serial"}++));
+}
+
+#+++############################################################################
+#                                                                              #
+# low-level API                                                                #
+#                                                                              #
+#---############################################################################
+
+#
+# FIXME: compatibility hack for Net::STOMP::Client 1.x (to be removed one day)
+#
+
+sub _hackopt (@) {
+    return("timeout" => $_[0]) if @_ == 1;
+    return(@_);
+}
+
+#
+# helper for the debug and timeout options
+#
+
+sub _chkopt ($$%) {
+    my($self, $what, %option) = @_;
+
+    # handle the global debug option
+    $option{"debug"} = $self->{"debug"}
+        unless exists($option{"debug"});
+    # handle the global timeout option
+    if ($what) {
+        $option{"timeout"} = $self->{"timeout"}{$what}
+            unless exists($option{"timeout"});
+    } else {
+        delete($option{"timeout"});
+    }
+    # so far so good
+    return(%option);
+}
+
+#
+# send data
+#
+
+sub send_data : method {
+    my($self, %option);
+
+    $self = shift(@_);
+    %option = _hackopt(@_);
+    # check that the I/O object is still usable
+    dief("lost connection") unless $self->{"io"};
+    # just do it
+    return($self->{"io"}->send_data(_chkopt($self, "send", %option)));
+}
+
+#
+# receive data
+#
+
+sub receive_data : method {
+    my($self, %option);
+
+    $self = shift(@_);
+    %option = _hackopt(@_);
+    # check that the I/O object is still usable
+    dief("lost connection") unless $self->{"io"};
+    # just do it
+    return($self->{"io"}->receive_data(_chkopt($self, "receive", %option)));
+}
+
+#
+# queue the given frame
+#
+
+sub queue_frame : method {
+    my($self, $frame, %option) = @_;
+    my($data);
+
+    # check that the I/O object is still usable
+    dief("lost connection") unless $self->{"io"};
+    if (ref($frame)) {
+        # a real frame
+        _run_hooks($self, $frame);
+        # encode it
+        $option{"version"} = $self->{"version"} if $self->{"version"};
+        $data = $frame->encode(_chkopt($self, undef, %option));
+    } else {
+        # handle already encoded frames (including the special NOOP frame)
+        $data = \$frame;
+    }
+    # queue what we have
+    return($self->{"io"}->queue_data($data));
+}
+
+#
+# send the given frame (i.e. queue and then send _all_ data)
+#
+
+sub send_frame : method {
+    my($self, $frame, %option);
+
+    $self = shift(@_);
+    $frame = shift(@_);
+    %option = _hackopt(@_);
+    # queue the frame
+    $self->queue_frame($frame, %option);
+    # send queued data
+    $self->send_data(%option);
+    # make sure we did send _all_ data
+    dief("could not send all data!") if $self->outgoing_buffer_length();
+}
+
+#
+# try to receive one frame (the frame is always checked, this is currently a feature)
+#
+
+sub receive_frame : method {
+    my($self, %option, $maxtime, %decopt, $bufref, $frame, $remaining);
+
+    $self = shift(@_);
+    %option = _hackopt(@_);
+    # keep track of time
+    $option{"timeout"} = $self->{"timeout"}{"receive"}
+        unless exists($option{"timeout"});
+    $maxtime = Time::HiRes::time() + $option{"timeout"}
+        if defined($option{"timeout"});
+    # first try to use the incoming buffer
+    %decopt = ("state" => {});
+    $decopt{"version"} = $self->{"version"} if $self->{"version"};
+    $decopt{"debug"} = $option{"debug"} if exists($option{"debug"});
+    $decopt{"debug"} = $self->{"debug"} unless exists($decopt{"debug"});
+    $bufref = $self->incoming_buffer_reference();
+    $frame = Net::STOMP::Client::Frame::decode($bufref, %decopt);
+    # if this fails, try to receive more data until we are done
+    while (not $frame) {
+        # where are we with time?
+        if (not defined($option{"timeout"})) {
+            # timeout = undef => blocking
+        } elsif ($option{"timeout"}) {
+            # timeout > 0 => try once more if not too late
+            $remaining = $maxtime - Time::HiRes::time();
+            return(0) if $remaining <= 0;
+            $option{"timeout"} = $remaining;
+        } else {
+            # timeout = 0 => non-blocking
+        }
+        # receive more data
+        return() unless $self->receive_data(%option);
+        # do we have a complete frame now?
+        $frame = Net::STOMP::Client::Frame::decode($bufref, %decopt);
+    }
+    # so far so good
+    _run_hooks($self, $frame) if $frame;
+    return($frame);
+}
+
+#
+# wait for new frames and dispatch them
+#
+
+sub wait_for_frames : method {
+    my($self, %option) = @_;
+    my($callback, $maxtime, $frame, $result, $remaining, %recvopt);
+
+    $callback = $option{callback};
+    %recvopt = ();
+    $recvopt{"debug"} = $option{"debug"} if exists($option{"debug"});
+    $recvopt{"debug"} = $self->{"debug"} unless exists($recvopt{"debug"});
+    if (defined($option{"timeout"})) {
+        $maxtime = Time::HiRes::time() + $option{"timeout"};
+        $recvopt{"timeout"} = $option{"timeout"};
+    }
+    while (1) {
+        $frame = $self->receive_frame(%recvopt);
+        if ($frame) {
+            # we always call first the per-command callback
+            $self->dispatch_frame($frame);
+            if ($callback) {
+                # user callback: we stop if callback returns error or true or if once
+                $result = $callback->($self, $frame);
+                return($result)
+                    if not defined($result) or $result or $option{once};
+            } else {
+                # no user callback: we stop on the first frame and return it
+                return($frame);
+            }
+        }
+        # we check if we exceeded the timeout
+        if (defined($maxtime)) {
+            $remaining = $maxtime - Time::HiRes::time();
+            return(0) if $remaining <= 0;
+            $recvopt{"timeout"} = $remaining;
+        }
+    }
+    # not reached...
+    die("ooops!");
+}
+
+#+++############################################################################
+#                                                                              #
+# high-level API (each method matches a client frame command)                  #
 #                                                                              #
 #---############################################################################
 
@@ -673,81 +598,46 @@ sub dispatch_frame : method {
 # check the method invocation for the high-level API (except connect)
 #
 
-sub _check_invocation : method {
-    my($self, $argc) = @_;
-    my($caller);
+sub _check_api ($$$$) {
+    my($self, $name, $header, $option) = @_;
+    my($debug);
 
-    $caller = (caller(1))[3];
-    $caller =~ s/^(.+)::/$1->/;
-    # debug
-    Net::STOMP::Client::Debug::report(Net::STOMP::Client::Debug::API, "%s()", $caller);
-    # must be called with a hash
-    unless ($argc % 2) {
-	Net::STOMP::Client::Error::report("%s(): wrong invocation", $caller);
-	return();
+    $option->{debug} = delete($header->{debug})
+        if exists($header->{debug});
+    $option->{timeout} = delete($header->{timeout})
+        if exists($header->{timeout});
+    $debug = exists($option->{debug}) ? $option->{debug} : $self->{debug};
+    log_debug("%s->%s()", "$self", $name)
+        if $debug and $debug =~ /\b(api|all)\b/;
+    if ($name eq "connect") {
+        dief("already connected") if $self->{"session"};
+    } else {
+        dief("not connected") unless $self->{"session"};
     }
-    # must be called after connection
-    unless ($self->session()) {
-	Net::STOMP::Client::Error::report("%s(): not connected", $caller);
-	return();
-    }
-    # so far so good
-    return($self);
 }
 
 #
 # connect to server
 #
 
-sub connect : method {
-    my($self, %option) = @_;
-    my($me, $frame, $timeout, @list, $session);
+sub connect : method {  ## no critic 'ProhibitBuiltinHomonyms'
+    my($self, %header) = @_;
+    my(%option, $frame);
 
-    $me = "Net::STOMP::Client->connect()";
-    # debug
-    Net::STOMP::Client::Debug::report(Net::STOMP::Client::Debug::API, "%s", $me);
-    # must be called with a hash
-    unless (scalar(@_) % 2) {
-	Net::STOMP::Client::Error::report("%s: wrong invocation", $me);
-	return();
-    }
-    # must be called before connection
-    if ($self->session()) {
-	Net::STOMP::Client::Error::report
-	    ("%s: already connected with session: %s", $me, $self->session());
-	return();
-    }
-    # so far so good
-    $timeout = delete($option{timeout});
-    if (grep($_ eq "1.1", @{ $self->_version() })) {
-	# supply additional STOMP 1.1 headers
-	$option{"accept-version"} = join(",", @{ $self->_version() })
-	    unless defined($option{"accept-version"});
-	$option{host} = $self->host()
-	    unless defined($option{host});
-	unless (defined($option{"heart-beat"})) {
-	    @list = ();
-	    # the protocol expects values in milliseconds...
-	    push(@list, int(($self->client_heart_beat() || 0) * 1000.0 + 0.5));
-	    push(@list, int(($self->server_heart_beat() || 0) * 1000.0 + 0.5));
-	    $option{"heart-beat"} = join(",", @list)
-		unless "@list" eq "0 0";
-	}
-    }
+    _check_api($self, "connect", \%header, \%option);
+    # send a CONNECT frame
     $frame = Net::STOMP::Client::Frame->new(
-	command => "CONNECT",
-	headers => \%option,
+        command => "CONNECT",
+        headers => \%header,
     );
-    $self->send_frame($frame, $timeout) or return();
-    $session = $self->wait_for_frames(
-	callback => sub { return($self->session()) },
-	timeout  => $self->_timeout("connected"),
+    $self->send_frame($frame, %option);
+    # wait for the CONNECTED frame to come back
+    $self->wait_for_frames(
+        callback => sub { return($self->{"session"}) },
+        timeout  => $self->{"timeout"}{"connected"},
     );
-    return() unless defined($session);
-    return($self) if $session;
-    Net::STOMP::Client::Error::report
-	("Net::STOMP::Client->connect(): %s", "no CONNECTED frame received");
-    return();
+    dief("no CONNECTED frame received") unless $self->{"session"};
+    return($self);
 }
 
 #
@@ -755,31 +645,34 @@ sub connect : method {
 #
 
 sub disconnect : method {
-    my($self, %option) = @_;
-    my($frame, $timeout);
+    my($self, %header) = @_;
+    my(%option, $frame);
 
-    $self->_check_invocation(scalar(@_)) or return();
-    $timeout = delete($option{timeout});
+    _check_api($self, "disconnect", \%header, \%option);
     # send a DISCONNECT frame
     $frame = Net::STOMP::Client::Frame->new(
-	command => "DISCONNECT",
-	headers => \%option,
+        command => "DISCONNECT",
+        headers => \%header,
     );
-    $self->send_frame($frame, $timeout) or return();
+    $self->send_frame($frame, %option);
     # if a receipt has been given, wait for it!
-    if ($option{receipt}) {
-	# at this point the server may abruptly close the socket without lingering
-	# so we ignore I/O errors while we wait for the receipt to come back
-	local $Net::STOMP::Client::Error::Die = 0;
-	$self->wait_for_frames(
-	    timeout  => $self->_timeout("disconnect"),
-	    callback => sub { return(! $self->_receipts()->{$option{receipt}}) },
-	);
+    if ($header{receipt}) {
+        # at this point, the server may abruptly close the socket without
+        # lingering so we ignore I/O errors while we wait for the receipt
+        # to come back
+        eval {
+            $self->wait_for_frames(
+                timeout  => $self->{"timeout"}{"disconnect"},
+                callback => sub {
+                    return(! $self->{"receipts"}{$header{receipt}});
+                },
+            );
+        };
     }
     # additional bookkeeping
-    $self->session("");
-    $self->peer(undef);
-    $self->_io(undef);
+    delete($self->{"peer"});
+    delete($self->{"session"});
+    _close($self);
     return($self);
 }
 
@@ -788,17 +681,16 @@ sub disconnect : method {
 #
 
 sub subscribe : method {
-    my($self, %option) = @_;
-    my($frame, $timeout);
+    my($self, %header) = @_;
+    my(%option, $frame);
 
-    $self->_check_invocation(scalar(@_)) or return();
-    $timeout = delete($option{timeout});
+    _check_api($self, "subscribe", \%header, \%option);
     # send a SUBSCRIBE frame
     $frame = Net::STOMP::Client::Frame->new(
-	command => "SUBSCRIBE",
-	headers => \%option,
+        command => "SUBSCRIBE",
+        headers => \%header,
     );
-    $self->send_frame($frame, $timeout) or return();
+    $self->send_frame($frame, %option);
     return($self);
 }
 
@@ -807,17 +699,16 @@ sub subscribe : method {
 #
 
 sub unsubscribe : method {
-    my($self, %option) = @_;
-    my($frame, $timeout);
+    my($self, %header) = @_;
+    my(%option, $frame);
 
-    $self->_check_invocation(scalar(@_)) or return();
-    $timeout = delete($option{timeout});
+    _check_api($self, "unsubscribe", \%header, \%option);
     # send an UNSUBSCRIBE frame
     $frame = Net::STOMP::Client::Frame->new(
-	command => "UNSUBSCRIBE",
-	headers => \%option,
+        command => "UNSUBSCRIBE",
+        headers => \%header,
     );
-    $self->send_frame($frame, $timeout) or return();
+    $self->send_frame($frame, %option);
     return($self);
 }
 
@@ -825,21 +716,22 @@ sub unsubscribe : method {
 # send a message somewhere
 #
 
-sub send : method {
-    my($self, %option) = @_;
-    my($frame, $timeout, %frameopt);
+sub send : method {  ## no critic 'ProhibitBuiltinHomonyms'
+    my($self, %header) = @_;
+    my(%option, %frameopt, $frame);
 
-    $self->_check_invocation(scalar(@_)) or return();
-    $timeout = delete($option{timeout});
-    $frameopt{body} = delete($option{body})
-	if defined($option{body});
-    $frameopt{body_reference} = delete($option{body_reference})
-	if defined($option{body_reference});
-    $frameopt{command} = "SEND";
-    $frameopt{headers} = \%option;
+    _check_api($self, "send", \%header, \%option);
+    # we can optionally give a message body here
+    $frameopt{body} = delete($header{body})
+        if defined($header{body});
+    $frameopt{body_reference} = delete($header{body_reference})
+        if defined($header{body_reference});
     # send a SEND frame
-    $frame = Net::STOMP::Client::Frame->new(%frameopt);
-    $self->send_frame($frame, $timeout) or return();
+    $frame = Net::STOMP::Client::Frame->new(%frameopt,
+        command => "SEND",
+        headers => \%header,
+    );
+    $self->send_frame($frame, %option);
     return($self);
 }
 
@@ -848,26 +740,26 @@ sub send : method {
 #
 
 sub ack : method {
-    my($self, %option) = @_;
-    my($frame, $timeout, $value);
+    my($self, %header) = @_;
+    my(%option, $frame, $value);
 
-    $self->_check_invocation(scalar(@_)) or return();
-    $timeout = delete($option{timeout});
+    _check_api($self, "ack", \%header, \%option);
     # we can optionally give a MESSAGE frame here
-    if ($option{frame}) {
-	# we are careful in case the frame is not a MESSAGE frame...
-	$value = $option{frame}->header("message-id");
-	$option{"message-id"} = $value if defined($value);
-	$value = $option{frame}->header("subscription");
-	$option{"subscription"} = $value if defined($value);
-	delete($option{frame});
+    if ($header{frame}) {
+        $value = $header{frame}->header("message-id");
+        $header{"message-id"} = $value if defined($value);
+        $value = $header{frame}->header("subscription");
+        $header{"subscription"} = $value if defined($value);
+        $value = $header{frame}->header("ack");
+        $header{"id"} = $value if defined($value);
+        delete($header{frame});
     }
     # send an ACK frame
     $frame = Net::STOMP::Client::Frame->new(
-	command => "ACK",
-	headers => \%option,
+        command => "ACK",
+        headers => \%header,
     );
-    $self->send_frame($frame, $timeout) or return();
+    $self->send_frame($frame, %option);
     return($self);
 }
 
@@ -876,31 +768,28 @@ sub ack : method {
 #
 
 sub nack : method {
-    my($self, %option) = @_;
-    my($frame, $timeout, $value);
+    my($self, %header) = @_;
+    my(%option, $frame, $value);
 
-    $self->_check_invocation(scalar(@_)) or return();
-    if ($self->version() eq "1.0") {
-	Net::STOMP::Client::Error::report
-	    ("Net::STOMP::Client->nack(): %s %s", "not supported for STOMP", $self->version());
-	return();
-    }
-    $timeout = delete($option{timeout});
+    _check_api($self, "nack", \%header, \%option);
+    dief("unsupported NACK frames for STOMP 1.0")
+        if $self->{"version"} eq "1.0";
     # we can optionally give a MESSAGE frame here
-    if ($option{frame}) {
-	# we are careful in case the frame is not a MESSAGE frame...
-	$value = $option{frame}->header("message-id");
-	$option{"message-id"} = $value if defined($value);
-	$value = $option{frame}->header("subscription");
-	$option{"subscription"} = $value if defined($value);
-	delete($option{frame});
+    if ($header{frame}) {
+        $value = $header{frame}->header("message-id");
+        $header{"message-id"} = $value if defined($value);
+        $value = $header{frame}->header("subscription");
+        $header{"subscription"} = $value if defined($value);
+        $value = $header{frame}->header("ack");
+        $header{"id"} = $value if defined($value);
+        delete($header{frame});
     }
     # send an NACK frame
     $frame = Net::STOMP::Client::Frame->new(
-	command => "NACK",
-	headers => \%option,
+        command => "NACK",
+        headers => \%header,
     );
-    $self->send_frame($frame, $timeout) or return();
+    $self->send_frame($frame, %option);
     return($self);
 }
 
@@ -909,17 +798,16 @@ sub nack : method {
 #
 
 sub begin : method {
-    my($self, %option) = @_;
-    my($frame, $timeout);
+    my($self, %header) = @_;
+    my(%option, $frame);
 
-    $self->_check_invocation(scalar(@_)) or return();
-    $timeout = delete($option{timeout});
+    _check_api($self, "begin", \%header, \%option);
     # send a BEGIN frame
     $frame = Net::STOMP::Client::Frame->new(
-	command => "BEGIN",
-	headers => \%option,
+        command => "BEGIN",
+        headers => \%header,
     );
-    $self->send_frame($frame, $timeout) or return();
+    $self->send_frame($frame, %option);
     return($self);
 }
 
@@ -928,17 +816,16 @@ sub begin : method {
 #
 
 sub commit : method {
-    my($self, %option) = @_;
-    my($frame, $timeout);
+    my($self, %header) = @_;
+    my(%option, $frame);
 
-    $self->_check_invocation(scalar(@_)) or return();
-    $timeout = delete($option{timeout});
+    _check_api($self, "commit", \%header, \%option);
     # send a COMMIT frame
     $frame = Net::STOMP::Client::Frame->new(
-	command => "COMMIT",
-	headers => \%option,
+        command => "COMMIT",
+        headers => \%header,
     );
-    $self->send_frame($frame, $timeout) or return();
+    $self->send_frame($frame, %option);
     return($self);
 }
 
@@ -947,53 +834,32 @@ sub commit : method {
 #
 
 sub abort : method {
-    my($self, %option) = @_;
-    my($frame, $timeout);
+    my($self, %header) = @_;
+    my(%option, $frame);
 
-    $self->_check_invocation(scalar(@_)) or return();
-    $timeout = delete($option{timeout});
-    # send an ABORT frame
+    _check_api($self, "abort", \%header, \%option);
+    # send a ABORT frame
     $frame = Net::STOMP::Client::Frame->new(
-	command => "ABORT",
-	headers => \%option,
+        command => "ABORT",
+        headers => \%header,
     );
-    $self->send_frame($frame, $timeout) or return();
+    $self->send_frame($frame, %option);
     return($self);
 }
 
 #
-# send an empty/noop frame (= a single newline byte)
+# send an empty/noop frame (in fact, a single newline byte)
 #
 
 sub noop : method {
-    my($self, %option) = @_;
-    my($frame, $timeout);
+    my($self, %header) = @_;
+    my(%option, $frame);
 
-    $self->_check_invocation(scalar(@_)) or return();
-    $timeout = delete($option{timeout});
+    _check_api($self, "noop", \%header, \%option);
     # there is no NOOP frame (yet) so we simply send a newline
     $frame = "\n";
-    $self->send_frame($frame, $timeout) or return();
+    $self->send_frame($frame, %option);
     return($self);
-}
-
-#
-# idem but only if needed wrt heart-beat settings
-#
-
-sub beat : method {
-    my($self, %option) = @_;
-    my($delta, $sent);
-
-    $self->_check_invocation(scalar(@_)) or return();
-    # check if client heart-beats are expected
-    $delta = $self->client_heart_beat();
-    return($self) unless $delta;
-    # check the last time we sent data
-    $sent = $self->last_sent();
-    return($self) if Time::HiRes::time() - $sent < $delta / 2;
-    # send a noop frame
-    return($self->noop(%option));
 }
 
 1;
@@ -1028,7 +894,6 @@ Net::STOMP::Client - STOMP object oriented client module
   # declare a callback to be called for each received message frame
   $stomp->message_callback(sub {
       my($self, $frame) = @_;
-
       $self->ack(frame => $frame);
       printf("received: %s\n", $frame->body());
       return($self);
@@ -1042,7 +907,6 @@ Net::STOMP::Client - STOMP object oriented client module
   # wait for a specified message frame
   $stomp->wait_for_frames(callback => sub {
       my($self, $frame) = @_;
-
       if ($frame->command() eq "MESSAGE") {
           # stop waiting for new frames if body is "quit"
           return(1) if $frame->body() eq "quit";
@@ -1055,10 +919,10 @@ Net::STOMP::Client - STOMP object oriented client module
 
 =head1 DESCRIPTION
 
-This module provides an object oriented client interface to interact
-with servers supporting STOMP (Streaming Text Orientated Messaging
-Protocol). It supports the major features of modern messaging brokers:
-SSL, asynchronous I/O, receipts and transactions.
+This module provides an object oriented client interface to interact with
+servers supporting STOMP (Streaming Text Orientated Messaging Protocol). It
+supports the major features of modern messaging brokers: SSL, asynchronous
+I/O, receipts and transactions.
 
 =head1 CONSTRUCTOR
 
@@ -1068,17 +932,23 @@ supported:
 
 =over
 
+=item C<accept_version>
+
+the STOMP version to use (string) or versions to use (reference to a list of
+strings); this defaults to the list of all supported versions
+
 =item C<version>
 
-the STOMP version to use (string) or versions to use (reference to a
-list of strings); this defaults to the list of all supported versions
+this attribute is obsolete and should not be used anymore, use
+C<accept_version> instead; it is left here only to provide backward
+compatibility with Net::STOMP::Client 1.x
 
 =item C<uri>
 
-the Uniform Resource Identifier (URI) specifying where the STOMP
-service is and how to connect to it, this can be for instance
-C<tcp://msg01:6163> or something more complex, see the L</"FAILOVER">
-section for more information
+the Uniform Resource Identifier (URI) specifying where the STOMP service is
+and how to connect to it, this can be for instance C<tcp://msg01:6163> or
+something more complex, see L<Net::STOMP::Client::Connection> for more
+information
 
 =item C<host>
 
@@ -1088,122 +958,131 @@ the server name or IP address
 
 the port number of the STOMP service
 
-=item C<timeout>
-
-the maximum time (in seconds) for various operations, see the L</"TIMEOUTS">
-section for more information
-
 =item C<sockopts>
 
 arbitrary socket options (as a hash reference) that will be passed to
 IO::Socket::INET->new() or IO::Socket::SSL->new()
 
-=item C<callbacks>
-
-a hash of code references that will be called on each received frame
-
 =item C<client_heart_beat>
 
-the desired client-side heart-beat setting, see the L</"HEART-BEATING">
-section for more information
+the desired client-side heart-beat setting, see
+L<Net::STOMP::Client::HeartBeat> for more information
 
 =item C<server_heart_beat>
 
-the desired server-side heart-beat setting, see the L</"HEART-BEATING">
+the desired server-side heart-beat setting, see
+L<Net::STOMP::Client::HeartBeat> for more information
+
+=item C<debug>
+
+the debugging flags for this object, see the L</"DEBUGGING"> section for
+more information
+
+=item C<timeout>
+
+the maximum time (in seconds) for various operations, see the L</"TIMEOUTS">
 section for more information
-
-=item C<blocking_io>
-
-true if the module should use blocking I/O, see L<Net::STOMP::Client::IO>
-for more information (default: false)
 
 =back
 
-Upon object creation, a TCP connection is made to the server but no
-data (i.e. STOMP frame) is exchanged.
+Upon object creation, a TCP connection is made to the server but no data
+(i.e. STOMP frame) is exchanged.
 
-=head2 FAILOVER
+=head2 DEBUGGING
 
-The C<uri> option of the new() method can be given a complex URI
-indicating some kind of failover, for instance:
-C<failover:(tcp://msg01:6163,tcp://msg02:6163)>.
+Net::STOMP::Client uses L<No::Worries::Log>'s log_debug() to log debugging
+information. In addition, to avoid useless data massaging, it also uses a
+debug string to specify what will be logged using log_debug().
 
-This must use the ActiveMQ syntax
-(see L<http://activemq.apache.org/failover-transport-reference.html>)
-and only some options are supported, namely: C<backOffMultiplier>,
-C<initialReconnectDelay>, C<maxReconnectAttempts>,
-C<maxReconnectDelay>, C<randomize> and C<useExponentialBackOff>.
+The debug string should contain a list of words describing what to log. For
+instance, "io" logs I/O information while "io connection" logs both I/O and
+connection information.
 
-When specified, these failover options will be used only inside the
-new() method (so at the TCP connection level) and not elsewhere. If
-the broker later fails during the STOMP interaction, it is up to the
-program author, knowing the logic of his code, to perform the
-appropriate recovery actions and eventually reconnect, using again the
-new() method.
-
-=head2 SSL
-
-When creating an object with Net::STOMP::Client->new(), if you supply some
-socket options (via C<sockopts>) with a name starting with C<SSL_>,
-or if you supply a URI (via C<uri>) with a scheme containg C<ssl>,
-L<IO::Socket::SSL> will be used to create the socket instead of
-L<IO::Socket::INET> and the communication with the server will then
-go through SSL.
-
-Here are the most commonly used SSL socket options:
+Here are the supported debug words that can be used:
 
 =over
 
-=item SSL_ca_path
+=item C<all>
 
-path to a directory containing several trusted certificates as
-separate files as well as an index of the certificates
+everything
 
-=item SSL_key_file
+=item C<api>
 
-path of your RSA private key
+high-level API calls
 
-=item SSL_cert_file
+=item C<body>
 
-path of your certificate
+frame bodies
 
-=item SSL_passwd_cb
+=item C<command>
 
-subroutine that should return the password required to decrypt your
-private key
+frame commands
+
+=item C<connection>
+
+connection establishment
+
+=item C<header>
+
+frame headers
+
+=item C<io>
+
+I/O as bytes sent/received
 
 =back
 
-For more information, see L<IO::Socket::SSL>.
+To enable debugging, you must first configure L<No::Worries::Log> so that it
+indeed reports debugging messages. This can be done with something like:
+
+  log_filter("debug");
+
+or, to enable logging only from Net::STOMP::Client modules:
+
+  log_filter("debug caller=~^Net::STOMP::Client");
+
+See the L<No::Worries::Log> documentation for more information.
+
+Then, you have to tell Net::STOMP::Client to indeed log what you want to
+see. This can be done globally for all connections by setting the global
+variable $Net::STOMP::Client::Debug:
+
+  $Net::STOMP::Client::Debug = "connection api";
+
+or per connection via the new() method:
+
+  $stomp = Net::STOMP::Client->new(
+      uri   => "stomp://mybroker:6163",
+      debug => "connection api",
+  );
 
 =head2 TIMEOUTS
 
-By default, when sending STOMP frames, the module waits until the
-frame indeed has been sent (from the socket point of view). In case
-the server is stuck or unusable, the module can therefore hang.
+By default, when sending STOMP frames, the module waits until the frame
+indeed has been sent (from the socket point of view). In case the server is
+stuck or unusable, the module can therefore hang.
 
 When creating the Net::STOMP::Client object, you can pass a C<timeout>
 attribute to better control how certain operations handle timeouts.
 
-This attribute should contain a reference to hash with the following
-keys:
+This attribute should contain a reference to hash with the following keys:
 
 =over
 
 =item connect
 
-TCP-level timeout that will be given to the underlying
-L<IO::Socket::INET> or L<IO::Socket::SSL> object (default: none)
+TCP-level timeout that will be given to the underlying L<IO::Socket::INET>
+or L<IO::Socket::SSL> object (default: none)
 
 =item connected
 
-timeout used while waiting for the initial CONNECTED frame from the
-broker (default: 10)
+timeout used while waiting for the initial C<CONNECTED> frame from the broker
+(default: 10)
 
 =item disconnect
 
 timeout specifying how long the disconnect() method should wait for a
-RECEIPT frame back in case the DISCONNECT frame contained a receipt
+C<RECEIPT> frame back in case the C<DISCONNECT> frame contained a receipt
 (default: 10)
 
 =item receive
@@ -1219,14 +1098,14 @@ timeout used while trying to send any frame (default: none)
 All values are in seconds. No timeout means wait until the operation
 succeeds.
 
-As a shortcut, the C<timeout> attribute can also be a scalar. In this
-case, only the C<connect> and C<connected> operations use this value.
+As a shortcut, the C<timeout> attribute can also be a scalar. In this case,
+only the C<connect> and C<connected> operations use this value.
 
 =head1 STOMP METHODS
 
 With a Net::STOMP::Client object, the following methods can be used to
-interact with the server. They match one-to-one the different commands
-that a client frame can hold:
+interact with the server. They match one-to-one the different commands that
+a client frame can hold:
 
 =over
 
@@ -1256,8 +1135,7 @@ acknowledge the reception of a message
 
 =item nack()
 
-acknowledge the rejection of a message
-(STOMP 1.1 only)
+acknowledge the rejection of a message (STOMP >=1.1 only)
 
 =item begin()
 
@@ -1273,8 +1151,8 @@ abort/rollback a transaction
 
 =back
 
-All these methods can receive options that will be passed directly as
-frame headers. For instance:
+All these methods can receive options that will be passed directly as frame
+headers. For instance:
 
   $stomp->subscribe(
       destination => "/queue/test",
@@ -1282,7 +1160,7 @@ frame headers. For instance:
       ack         => "client",
   );
 
-Some methods also support other options:
+Some methods also support additional options:
 
 =over
 
@@ -1293,16 +1171,17 @@ message to be sent
 
 =item ack()
 
-C<frame>: holds the MESSAGE frame object to ACK
+C<frame>: holds the C<MESSAGE> frame object to ack
 
 =item nack()
 
-C<frame>: holds the MESSAGE frame object to NACK
+C<frame>: holds the C<MESSAGE> frame object to nack
 
 =back
 
-Finally, all methods support a C<timeout> option that will be given to
-the send_frame() method called internally to send the crafted frame.
+Finally, all methods support C<debug> and C<timeout> options that will be
+given to the send_frame() method called internally to send the crafted
+frame.
 
 =head1 OTHER METHODS
 
@@ -1312,12 +1191,12 @@ In addition to the STOMP methods, the following ones are also available:
 
 =item new(OPTIONS)
 
-return a new Net::STOMP::Client object
+return a new Net::STOMP::Client object (constructor)
 
 =item peer()
 
-return a Net::STOMP::Client::Peer object containing information about
-the connected STOMP server
+return a L<Net::STOMP::Client::Peer> object containing information about the
+connected STOMP server
 
 =item socket()
 
@@ -1325,61 +1204,45 @@ return the file handle of the socket connecting the client and the server
 
 =item server()
 
-return the server header seen on the CONNECTED frame or the empty
-string if not seen
+return the server header seen on the C<CONNECTED> frame (if any)
 
 =item session()
 
-return the session identifier if connected or the empty string otherwise
-
-=item version()
-
-return the STOMP version that has been negotiated between the client
-and the server or undef if the negotiation did not take place yet
+return the session identifier if connected or false otherwise
 
 =item uuid()
 
 return a universal pseudo-unique identifier to be used for instance in
 receipts and transactions
 
-=item receipts()
-
-return the list of not-yet-received receipts, see the L</"RECEIPTS">
-section for more information
-
 =item wait_for_frames()
 
 wait for frames coming from the server, see the next section for more
 information
 
-=item wait_for_receipts()
-
-wait for all receipts to be received, using wait_for_frames() underneath
-
 =item noop([timeout => TIMEOUT])
 
-send an empty/noop frame i.e. a single newline byte, using
-send_frame() underneath
+send an empty/noop frame i.e. a single newline byte, using send_frame()
+underneath
 
 =back
 
 =head1 CALLBACKS
 
-Since STOMP is asynchronous (for instance, C<MESSAGE> frames could be
-sent by the server at any time), Net::STOMP::Client uses callbacks to handle
+Since STOMP is asynchronous (for instance, C<MESSAGE> frames could be sent
+by the server at any time), Net::STOMP::Client uses callbacks to handle
 frames. There are in fact two levels of callbacks.
 
-First, there are per-command callbacks that will be called each time a
-frame is handled (via the internal method dispatch_frame()). Net::STOMP::Client
-implements default callbacks that should be sufficient for all frames
-except C<MESSAGE> frames, which should really be handled by the coder.
-These callbacks should return undef on error, something else on success.
+First, there are per-command callbacks that will be called each time a frame
+is handled (via the internal dispatch_frame() method). Net::STOMP::Client
+implements default callbacks that should be sufficient for all frames except
+C<MESSAGE> frames, which should really be handled by the coder.  These
+callbacks should return undef on error, something else on success.
 
 Here is an example with a callback counting the messages received:
 
   $stomp->message_callback(sub {
       my($self, $frame) = @_;
-
       $MessageCount++;
       return($self);
   });
@@ -1399,18 +1262,18 @@ callbacks:
 
 =back
 
-These callbacks are somehow global and it is good practice not to
-change them during a session. If you do not need a global message
-callback, you can supply the dummy:
+These callbacks are somehow global and it is good practice not to change
+them during a session. If you do not need a global message callback, you can
+supply the dummy:
 
   $stomp->message_callback(sub { return(1) });
 
 Then, the wait_for_frames() method takes an optional callback argument
 holding some code to be called for each received frame, after the
-per-command callback has been called. This can be seen as a local
-callback, only valid for the call to wait_for_frames(). This callback
-must return undef on error, false if more frames are expected or true
-if wait_for_frames() can now stop waiting for new frames and return.
+per-command callback has been called. This can be seen as a local callback,
+only valid for the call to wait_for_frames(). This callback must return
+undef on error, false if more frames are expected or true if
+wait_for_frames() can now stop waiting for new frames and return.
 
 Here are all the options that can be given to wait_for_frames():
 
@@ -1422,8 +1285,7 @@ code to be called for each received frame (see above)
 
 =item timeout
 
-time to wait before giving up, undef means wait forever, this is the
-default
+time to wait before giving up, undef means wait forever, this is the default
 
 =item once
 
@@ -1431,42 +1293,9 @@ wait only for one frame, within the given timeout
 
 =back
 
-The return value of wait_for_frames() can be: undef in case of error,
-false if no suitable frame has been received, the received frame if
-there is no user callback or the user callback return value otherwise.
-
-=head1 RECEIPTS
-
-Net::STOMP::Client has built-in support for receipts.
-
-Each time a frame is sent, its C<receipt> header (if supplied) is
-remembered.
-
-Each time a C<RECEIPT> frame is received from the server, the
-corresponding receipt is ticked off.
-
-The receipts() method can be used to get the list of outstanding
-receipts.
-
-The wait_for_receipts() method can be used to wait for all missing
-receipts.
-
-Here is sample code to send two messages with receipts and then wait
-for both acknowledgments to come back from the server within ten
-seconds:
-
-  $stomp->send(
-      destination => "/queue/test1",
-      body        => "message 1",
-      receipt     => $stomp->uuid(),
-  );
-  $stomp->send(
-      destination => "/queue/test2",
-      body        => "message 2",
-      receipt     => $stomp->uuid(),
-  );
-  $stomp->wait_for_receipts(timeout => 10);
-  die("Not all receipts received!\n") if $stomp->receipts();
+The return value of wait_for_frames() can be: false if no suitable frame has
+been received, the received frame if there is no user callback or the user
+callback return value otherwise.
 
 =head1 TRANSACTIONS
 
@@ -1490,91 +1319,47 @@ Here is an example using transactions:
   # commit the transaction
   $stomp->commit(transaction => $tid);
 
-=head1 HEART-BEATING
-
-STOMP 1.1 defines how each end of a STOMP connection can check if the
-other end is alive. To support heart-beating, this module provides the
-following methods:
-
-=over
-
-=item last_received()
-
-return the time at which data was last received, i.e. read from the
-network socket
-
-=item last_sent()
-
-return the time at which data was last sent, i.e. written to the
-network socket
-
-=item client_heart_beat()
-
-(after having received the CONNECTED frame) return the negotiated
-client-side heart-beat setting
-
-=item server_heart_beat()
-
-(after having received the CONNECTED frame) return the negotiated
-server-side heart-beat setting
-
-=item beat([timeout => TIMEOUT])
-
-send a noop frame (using the noop() method) unless the last sent time
-is recent enough with regard to the client heart-beat setting
-
-=back
-
-For consistency with other Perl modules (for instance Time::HiRes),
-time is always expressed as a fractional number of seconds.
-
-To use heart-beating, the client must specify the desired
-C<client_heart_beat> and/or C<server_heart_beat> attributes when
-invoking the new() method. Then, once the CONNECTED frame has been
-received, it can get the negotiated values with the methods above.
-
-To prove that it is alive, the client just needs to call the beat()
-method.
-
-To check if the server is alive, the client just needs to compare
-what is returned by the last_received() and server_heart_beat() methods.
-
 =head1 LOW-LEVEL API
 
-It should be enough to use the high-level API and use, for instance,
-the send() method to create a MESSAGE frame and send it in one go.
+It should be enough to use the high-level API and use, for instance, the
+send() method to create a C<MESSAGE> frame and send it in one go.
 
-If you need lower level interaction, you can manipulate frames with
-the Net::STOMP::Client::Frame module.
+If you need lower level interaction, you can manipulate frames with the
+L<Net::STOMP::Client::Frame> module.
 
 You can also use:
 
 =over
 
-=item $stomp->dispatch_frame(FRAME)
+=item $stomp->dispatch_frame(FRAME, [OPTIONS])
 
-dispatch one received frame by calling the appropriate callback
+dispatch one received frame by calling the appropriate callback;
+supported options: C<debug>
 
-=item $stomp->send_frame(FRAME, TIMEOUT)
+=item $stomp->send_frame(FRAME, [OPTIONS])
 
-try to send the given frame object within the given TIMEOUT
+try to send the given frame object;
+supported options: C<timeout> and C<debug>
 
-=item $stomp->queue_frame(FRAME)
+=item $stomp->queue_frame(FRAME, [OPTIONS])
 
-add the given frame to the outgoing buffer queue
+add the given frame to the outgoing buffer queue;
+supported options: C<debug>
 
-=item $stomp->send_data(TIMEOUT)
+=item $stomp->send_data([OPTIONS])
 
-send all the queued data within the given TIMEOUT
+send all the queued data;
+supported options: C<timeout> and C<debug>
 
-=item $stomp->receive_frame(TIMEOUT)
+=item $stomp->receive_frame([OPTIONS])
 
-try to receive a frame within the given TIMEOUT
+try to receive a frame;
+supported options: C<timeout> and C<debug>
 
-=item $stomp->receive_data(TIMEOUT)
+=item $stomp->receive_data([OPTIONS])
 
-try to receive data within the given TIMEOUT, this data will be
-appended to the incoming buffer
+try to receive data (this data will be appended to the incoming buffer);
+supported options: C<timeout> and C<debug>
 
 =item $stomp->outgoing_buffer_length()
 
@@ -1586,29 +1371,28 @@ return a reference to the incoming buffer
 
 =back
 
-In these methods, the TIMEOUT argument can either be C<undef> (meaning
-block until it's done) or C<0> (meaning do not block at all) or a
-positive number (meaning block at most this number of seconds).
+In these methods, the C<timeout> option can either be C<undef> (meaning
+block until it's done) or C<0> (meaning do not block at all) or a positive
+number (meaning block at most this number of seconds).
 
 =head1 COMPATIBILITY
 
-This module implements the versions
-C<1.0> (see L<http://stomp.github.com/stomp-specification-1.0.html>) and
-C<1.1> (see L<http://stomp.github.com/stomp-specification-1.1.html>)
-of the protocol as well as well known extensions for JMS, ActiveMQ,
-Apollo and RabbitMQ.
+This module has been successfully tested against ActiveMQ, Apollo, HornetQ
+and RabbitMQ brokers.
 
-It has been successfully tested against ActiveMQ, Apollo, HornetQ and
-RabbitMQ brokers.
+See L<Net::STOMP::Client::Version> for the list of supported STOMP protocol
+versions.
 
 =head1 SEE ALSO
 
-L<IO::Socket::INET>,
-L<IO::Socket::SSL>,
-L<Net::STOMP::Client::Error>,
+L<Net::STOMP::Client::Connection>,
 L<Net::STOMP::Client::Frame>,
+L<Net::STOMP::Client::HeartBeat>,
 L<Net::STOMP::Client::Peer>,
-L<Time::HiRes>.
+L<Net::STOMP::Client::Receipt>,
+L<Net::STOMP::Client::Tutorial>,
+L<Net::STOMP::Client::Version>,
+L<No::Worries::Log>.
 
 =head1 AUTHOR
 

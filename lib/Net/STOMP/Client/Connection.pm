@@ -13,248 +13,282 @@
 package Net::STOMP::Client::Connection;
 use strict;
 use warnings;
-our $VERSION  = "1.8";
-our $REVISION = sprintf("%d.%02d", q$Revision: 1.2 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.9_1";
+our $REVISION = sprintf("%d.%02d", q$Revision: 2.2 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
 #
 
-use IO::Socket::INET;
+use IO::Socket::INET qw();
 use List::Util qw(shuffle);
-use Net::STOMP::Client::Error;
-use Net::STOMP::Client::Peer;
+use Net::STOMP::Client::Peer qw();
+use No::Worries::Die qw(dief);
+use No::Worries::File qw(file_read);
+use No::Worries::Log qw(log_debug);
+use Params::Validate qw(validate :types);
 use Time::HiRes qw();
 
+#+++############################################################################
+#                                                                              #
+# private helpers                                                              #
+#                                                                              #
+#---############################################################################
+
 #
-# connect to the server (low level)
+# convert a URI (with no options) to a peer object
 #
 
-sub _new_low ($$$$%) {
-    my($caller, $proto, $host, $port, %sockopt) = @_;
+sub _uri2peer ($) {
+    my($uri) = @_;
+
+    if ($uri =~ m{ ^ (tcp|ssl|stomp|stomp\+ssl)
+                     \:\/\/ ([a-z0-9\.\-]+) \: (\d+) \/? $ }x) {
+        return(Net::STOMP::Client::Peer->new(
+            proto => $1,
+            host  => $2,
+            port  => $3,
+        ));
+    } else {
+        dief("unexpected server uri: %s", $uri);
+    }
+}
+
+#
+# set the default connection options
+#
+
+sub _default_options ($) {
+    my($option) = @_;
+
+    $option->{randomize}  =  1;
+    $option->{sleep}      =  0.01;
+    $option->{max_sleep}  = 30;
+    $option->{multiplier} =  2;
+}
+
+#
+# parse an option string (we do not complain about unknown options)
+#
+
+sub _parse_options ($$) {
+    my($option, $string) = @_;
+
+    if ($string =~ /\b(backOffMultiplier=(\d+(\.\d+)?))\b/) {
+        $option->{multiplier} = $2;
+    }
+    if ($string =~ /\b(useExponentialBackOff=false)\b/) {
+        $option->{multiplier} = 0;
+    }
+    if ($string =~ /\b(randomize=false)\b/) {
+        $option->{randomize} = 0;
+    }
+    if ($string =~ /\b(initialReconnectDelay=(\d+))\b/) {
+        $option->{sleep} = $2 / 1000;
+    }
+    if ($string =~ /\b(maxReconnectDelay=(\d+))\b/) {
+        $option->{max_sleep} = $2 / 1000;
+    }
+    if ($string =~ /\b(maxReconnectAttempts=(\d+))\b/) {
+        $option->{max_attempt} = $2 + 1;
+    }
+}
+
+#
+# parse a connection URI
+#
+# supported URIs:
+#  - tcp://foo:12
+#  - file:/foo/bar
+#  - ActiveMQ failover URIs
+#
+
+sub _parse_uri ($) {
+    my($uri) = @_;
+    my(@peers, %option, @list);
+
+    while (1) {
+        if ($uri =~ /^file:(.+)$/) {
+            # list of URIs stored in a file, one per line
+            @list = ();
+            foreach my $line (split(/\n/, file_read($1))) {
+                $line =~ s/\#.*//;
+                $line =~ s/\s+//g;
+                push(@list, $line) if length($line);
+            }
+            if (@list == 1) {
+                # if only one, allow failover syntax for it
+                $uri = shift(@list);
+            } else {
+                # otherwise, they must be simple URIs
+                @peers = map(_uri2peer($_), @list);
+                last;
+            }
+        } elsif ($uri =~ m{ ^ failover \: (?:\/\/)? \( ([a-z0-9\.\-\:\/\,]+) \)
+                            ( \? [a-z0-9\.\=\-\&]+ ) ? $ }x) {
+            # failover with options
+            _default_options(\%option);
+            _parse_options(\%option, $2) if $2;
+            @peers = map(_uri2peer($_), split(/,/, $1));
+            last;
+        } elsif ($uri =~ m{ ^ failover \: ([a-z0-9\.\-\:\/\,]+) $ }x) {
+            # failover without options
+            _default_options(\%option);
+            @peers = map(_uri2peer($_), split(/,/, $1));
+            last;
+        } else {
+            # otherwise this must be a simple URI
+            @peers = (_uri2peer($uri));
+            last;
+        }
+    }
+    dief("empty server uri: %s", $uri) unless @peers;
+    return(\@peers, \%option);
+}
+
+#
+# attempt to connect to one peer (low level)
+#
+
+sub _attempt ($%) {
+    my($peer, %sockopt) = @_;
     my($socket);
 
     # options sanity
     $sockopt{Proto} = "tcp"; # yes, even SSL is TCP...
-    $sockopt{PeerAddr} = $host;
-    $sockopt{PeerPort} = $port;
-    # from now on, the errors are non-fatal and must be checked by the caller
-    local $Net::STOMP::Client::Error::Die = 0;
+    $sockopt{PeerAddr} = $peer->host();
+    $sockopt{PeerPort} = $peer->port();
     # try to connect
-    if ($proto =~ /\b(ssl)\b/) {
-	# with SSL
-	unless ($IO::Socket::SSL::VERSION) {
-	    eval { require IO::Socket::SSL };
-	    if ($@) {
-		Net::STOMP::Client::Error::report
-		    ("%s: cannot load IO::Socket::SSL: %s", $caller, $@);
-		return();
-	    }
-	}
-	$socket = IO::Socket::SSL->new(%sockopt);
-	unless ($socket) {
-	    Net::STOMP::Client::Error::report
-		("%s: cannot SSL connect to %s:%d: %s", $caller, $sockopt{PeerAddr},
-		 $sockopt{PeerPort}, IO::Socket::SSL::errstr());
-	    return();
-	}
+    if ($peer->proto() =~ /\b(ssl)\b/) {
+        # with SSL
+        unless ($IO::Socket::SSL::VERSION) {
+            eval { require IO::Socket::SSL };
+            return(sprintf("cannot load IO::Socket::SSL: %s", $@)) if $@;
+        }
+        $socket = IO::Socket::SSL->new(%sockopt);
+        return(sprintf("cannot SSL connect to %s:%d: %s", $peer->host(),
+                       $peer->port(), IO::Socket::SSL::errstr()))
+            unless $socket;
     } else {
-	# with TCP
-	$socket = IO::Socket::INET->new(%sockopt);
-	unless ($socket) {
-	    Net::STOMP::Client::Error::report
-		("%s: cannot connect to %s:%d: %s", $caller, $sockopt{PeerAddr},
-		 $sockopt{PeerPort}, $!);
-	    return();
-	}
-	unless (binmode($socket)) {
-	    Net::STOMP::Client::Error::report
-		("%s: cannot binmode(socket): %s", $caller, $!);
-	    return();
-	}
+        # with plain TCP
+        $socket = IO::Socket::INET->new(%sockopt);
+        return(sprintf("cannot connect to %s:%d: %s", $peer->host(),
+                       $peer->port(), $!))
+            unless $socket;
+        return(sprintf("cannot binmode(socket): %s", $!))
+            unless binmode($socket);
     }
     # so far so good...
+    @{ $peer }[Net::STOMP::Client::Peer::I_ADDR] = $socket->peerhost();
     return($socket);
 }
 
 #
-# connect to the server (high level)
+# try to connect to a list of peers (high level)
 #
 
-sub _new_high ($$$%) {
-    my($caller, $peers, $sockopt, %option) = @_;
-    my(@list, $count, $peer, $socket);
+sub _try ($$$$) {
+    my($peers, $peeropt, $sockopt, $debug) = @_;
+    my(@list, $count, $result);
 
+    dief("no peers given!") unless @{ $peers };
     $count = 0;
     while (1) {
-	@list = $option{randomize} ? shuffle(@$peers) : @$peers;
-	foreach $peer (@list) {
-	    $socket = _new_low($caller, $peer->proto(), $peer->host(), $peer->port(),
-			       %$sockopt);
-	    if ($socket) {
-		# keep track of the address we are connected to
-		$peer->addr($socket->peerhost());
-		return($socket, $peer);
-	    }
-	    $count++;
-	    if (defined($option{max_attempt})) {
-		last if $count >= $option{max_attempt};
-	    }
-	    if ($option{sleep}) {
-		Time::HiRes::sleep($option{sleep});
-		if ($option{multiplier}) {
-		    $option{sleep} *= $option{multiplier};
-		    if ($option{max_sleep} and $option{sleep} > $option{max_sleep}) {
-			$option{sleep} = $option{max_sleep};
-			delete($option{multiplier});
-		    }
-		}
-	    }
-	}
-	if (defined($option{max_attempt})) {
-	    last if $count >= $option{max_attempt};
-	}
-	last unless keys(%option);
+        @list = $peeropt->{randomize} ? shuffle(@{ $peers }) : @{ $peers };
+        foreach my $peer (@list) {
+            $result = _attempt($peer, %{ $sockopt });
+            if (ref($result)) {
+                log_debug("connect to %s ok: %s", $peer->uri(), $peer->addr())
+                    if $debug =~ /\b(connection|all)\b/;
+                return($result, $peer);
+            } else {
+                log_debug("connect to %s failed: %s", $peer->uri(), $result)
+                    if $debug =~ /\b(connection|all)\b/;
+            }
+            $count++;
+            if (defined($peeropt->{max_attempt})) {
+                last if $count >= $peeropt->{max_attempt};
+            }
+            if ($peeropt->{sleep}) {
+                Time::HiRes::sleep($peeropt->{sleep});
+                if ($peeropt->{multiplier}) {
+                    $peeropt->{sleep} *= $peeropt->{multiplier};
+                    if ($peeropt->{max_sleep} and
+                        $peeropt->{sleep} > $peeropt->{max_sleep}) {
+                        $peeropt->{sleep} = $peeropt->{max_sleep};
+                        delete($peeropt->{multiplier});
+                    }
+                }
+            }
+        }
+        if (defined($peeropt->{max_attempt})) {
+            last if $count >= $peeropt->{max_attempt};
+        }
+        last unless keys(%{ $peeropt });
     }
-    # we only report the last error message...
-    Net::STOMP::Client::Error::report("%s", $Net::STOMP::Client::Error::Message);
-    return();
+    # in case of failure, we only report the last error message...
+    dief($result);
 }
 
-#
-# connect to the server (given a uri)
-#
-# see: http://activemq.apache.org/failover-transport-reference.html
-#
+#+++############################################################################
+#                                                                              #
+# public function                                                              #
+#                                                                              #
+#---############################################################################
 
-sub _uris2peers ($@) {
-    my($caller, @uris) = @_;
-    my($uri, @peers);
+my %new_options = (
+    "host" => {
+        optional => 1,
+        type     => SCALAR,
+        regex    => qr/^[a-z0-9\.\-]+$/,
+    },
+    "port" => {
+        optional => 1,
+        type     => SCALAR,
+        regex    => qr/^\d+$/,
+    },
+    "uri" => {
+        optional => 1,
+        type     => SCALAR,
+    },
+    "sockopt" => {
+        optional => 1,
+        type     => HASHREF,
+    },
+    "debug" => {
+        optional => 1,
+        type     => UNDEF|SCALAR,
+    },
+);
 
-    foreach $uri (@uris) {
-	unless ($uri =~ /^(tcp|ssl|stomp|stomp\+ssl):\/\/([\w\.\-]+):(\d+)\/?$/) {
-	    Net::STOMP::Client::Error::report("%s: unexpected server uri: %s", $caller, $uri);
-	    return();
-	}
-	push(@peers, Net::STOMP::Client::Peer->new(
-	    proto => $1,
-	    host  => $2,
-	    port  => $3,
-	));
+sub new (@) {
+    my(%option, $proto, $peers, $peeropt);
+
+    %option = validate(@_, \%new_options);
+    $option{sockopt} ||= {};
+    $option{debug} ||= "";
+    if (defined($option{uri})) {
+        # by URI
+        dief("unexpected server host: %s", $option{host})
+            if defined($option{host});
+        dief("unexpected server port: %s", $option{port})
+            if defined($option{port});
+        ($peers, $peeropt) = _parse_uri($option{uri});
+    } else {
+        # by host + port
+        dief("missing server host") unless defined($option{host});
+        dief("missing server port") unless defined($option{port});
+        $proto = "tcp";
+        $proto = "ssl" if grep(/^SSL_/, keys(%{ $option{sockopt} }));
+        $peers = [
+            Net::STOMP::Client::Peer->new(
+                proto => $proto,
+                host  => $option{host},
+                port  => $option{port},
+            ) ];
+        $peeropt = {};
     }
-    return(\@peers);
-}
-
-sub _new_uri ($$%) {
-    my($caller, $uri, %sockopt) = @_;
-    my($path, $fh, $line, @list, $peers, %option);
-
-    while (1) {
-	if ($uri =~ /^file:(.+)$/) {
-	    # list of uris stored in a file, one per line
-	    @list = ();
-	    $path = $1;
-	    unless (open($fh, "<", $path)) {
-		Net::STOMP::Client::Error::report
-		    ("%s: cannot open %s: %s", $caller, $path, $!);
-		return();
-	    }
-	    while (defined($line = <$fh>)) {
-		$line =~ s/\#.*//;
-		$line =~ s/\s+//g;
-		push(@list, $line) if length($line);
-	    }
-	    unless (close($fh)) {
-		Net::STOMP::Client::Error::report
-		    ("%s: cannot close %s: %s", $caller, $path, $!);
-		return();
-	    }
-	    if (@list == 1) {
-		# if only one, allow failover syntax
-		$uri = shift(@list);
-	    } else {
-		$peers = _uris2peers($caller, @list);
-		last;
-	    }
-	} elsif ($uri =~ /^failover:(\/\/)?\(([\w\.\-\:\/\,]+)\)(\?[\w\=\-\&]+)?$/) {
-	    # failover with options (only "randomize" is supported)
-	    $line = $3;
-	    $peers = _uris2peers($caller, split(/,/, $2));
-	    %option = (randomize => 1, sleep => 0.01, max_sleep => 30, multiplier => 2);
-	    if ($line) {
-		$option{multiplier} = $2 if $line =~ /\b(backOffMultiplier=(\d+(\.\d+)?))\b/;
-		$option{multiplier} = 0 if $line =~ /\b(useExponentialBackOff=false)\b/;
-		$option{randomize} = 0 if $line =~ /\b(randomize=false)\b/;
-		$option{sleep} = $2/1000 if $line =~ /\b(initialReconnectDelay=(\d+))\b/;
-		$option{max_sleep} = $2/1000 if $line =~ /\b(maxReconnectDelay=(\d+))\b/;
-		$option{max_attempt} = $2+1 if $line =~ /\b(maxReconnectAttempts=(\d+))\b/;
-	    }
-	    last;
-	} elsif ($uri =~ /^failover:([\w\.\-\:\/\,]+)$/) {
-	    # failover without options
-	    $peers = _uris2peers($caller, split(/,/, $1));
-	    %option = (randomize => 1, sleep => 0.01, max_sleep => 30, multiplier => 2);
-	    last;
-	} else {
-	    $peers = _uris2peers($caller, $uri);
-	    last;
-	}
-    }
-    return() unless $peers;
-    unless (@$peers) {
-	Net::STOMP::Client::Error::report("%s: empty server uri: %s", $caller, $uri);
-	return();
-    }
-    return(_new_high($caller, $peers, \%sockopt, %option));
-}
-
-#
-# connect to the server (given a host+port)
-#
-
-sub _new_host_port ($$$%) {
-    my($caller, $host, $port, %sockopt) = @_;
-    my($peer);
-
-    $peer = Net::STOMP::Client::Peer->new(
-	proto => grep(/^SSL_/, keys(%sockopt)) ? "ssl" : "tcp",
-	host  => $host,
-	port  => $port,
-    );
-    return(_new_high($caller, [$peer], \%sockopt));
-}
-
-#
-# connect to the server
-#
-
-sub _new ($$$%) {
-    my($caller, $host, $port, $uri, %sockopt) = @_;
-
-    if ($uri) {
-	# uri
-	if ($host) {
-	    Net::STOMP::Client::Error::report
-		("%s: unexpected server host: %s", $caller, $host);
-	    return();
-	}
-	if ($port) {
-	    Net::STOMP::Client::Error::report
-		("%s: unexpected server port: %s", $caller, $port);
-	    return();
-	}
-	return(_new_uri($caller, $uri, %sockopt));
-    }
-    # host + port
-    unless ($host) {
-	Net::STOMP::Client::Error::report("%s: missing server host", $caller);
-	return();
-    }
-    unless ($port) {
-	Net::STOMP::Client::Error::report("%s: missing server port", $caller);
-	return();
-    }
-    return(_new_host_port($caller, $host, $port, %sockopt));
+    return(_try($peers, $peeropt, $option{sockopt}, $option{debug}));
 }
 
 1;
@@ -267,10 +301,82 @@ Net::STOMP::Client::Connection - Connection support for Net::STOMP::Client
 
 =head1 DESCRIPTION
 
-This module provides connection support for Net::STOMP::Client.
+This module provides connection establishment support (plain TCP and SSL) as
+well as URI handling.
 
-It is used internally by Net::STOMP::Client and should not be used
-elsewhere.
+It is used internally by L<Net::STOMP::Client> and should not be directly
+used elsewhere.
+
+=head1 FUNCTIONS
+
+This module provides the following function (which is B<not> exported):
+
+=over
+
+=item new([OPTIONS])
+
+attempt to establish a new connection to a STOMP server
+
+=back
+
+=head1 SSL
+
+When creating an object with L<Net::STOMP::Client>'s new() method, if you
+supply some socket options (via C<sockopts>) with a name starting with
+C<SSL_> or if you supply a URI (via C<uri>) with a scheme containg C<ssl>
+then L<IO::Socket::SSL> will be used to create the socket instead of
+L<IO::Socket::INET> and the communication with the server will then go
+through SSL.
+
+Here are the most commonly used SSL socket options:
+
+=over
+
+=item SSL_ca_path
+
+path to a directory containing several trusted certificates as separate
+files as well as an index of the certificates
+
+=item SSL_key_file
+
+path of your RSA private key
+
+=item SSL_cert_file
+
+path of your certificate
+
+=item SSL_passwd_cb
+
+subroutine that should return the password required to decrypt your private
+key
+
+=back
+
+For more information, see L<IO::Socket::SSL>.
+
+=head1 FAILOVER
+
+The C<uri> option of L<Net::STOMP::Client>'s new() method can be given a
+complex URI indicating some kind of failover, for instance:
+C<failover:(tcp://msg01:6163,tcp://msg02:6163)>.
+
+The given URI must use the ActiveMQ failover syntax (see
+L<http://activemq.apache.org/failover-transport-reference.html>) and only
+some options are supported, namely: C<backOffMultiplier>,
+C<initialReconnectDelay>, C<maxReconnectAttempts>, C<maxReconnectDelay>,
+C<randomize> and C<useExponentialBackOff>.
+
+When specified, these failover options will be used only inside the new()
+method (so at the TCP connection level) and not elsewhere. If the broker
+later fails during the STOMP interaction, it is up to the program author,
+knowing the logic of his code, to perform the appropriate recovery actions
+and eventually reconnect, using again the new() method.
+
+=head1 SEE ALSO
+
+L<IO::Socket::INET>,
+L<IO::Socket::SSL>,
+L<Net::STOMP::Client>.
 
 =head1 AUTHOR
 

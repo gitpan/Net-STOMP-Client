@@ -1,5 +1,12 @@
 Revision history for Net-STOMP-Client:
 
+???	???
+	* Major code refactoring, see README.2.x for more information.
+	* Cleanup code to please Perl::Critic.
+	* Removed support for blocking I/O, only non-blocking I/O is supported.
+	* Now using the No::Worries and Params::Validate modules from CPAN.
+	* Added STOMP 1.2 support.
+
 1.8	Thu Sep 27 2012
 	* Ignore I/O errors after we have successfully sent the DISCONNECT frame.
 	* Added support for non-blocking I/O, this is now the default I/O mode.

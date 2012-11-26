@@ -3,21 +3,21 @@ MANIFEST			This list of files
 META.yml			Module meta-data (added by MakeMaker)
 Makefile.PL
 README
+README.2.x
 VERSION
 eg/README
 eg/listener
 eg/publisher
 lib/Net/STOMP/Client.pm
 lib/Net/STOMP/Client/Connection.pm
-lib/Net/STOMP/Client/Debug.pm
-lib/Net/STOMP/Client/Error.pm
 lib/Net/STOMP/Client/Frame.pm
+lib/Net/STOMP/Client/HeartBeat.pm
 lib/Net/STOMP/Client/IO.pm
-lib/Net/STOMP/Client/OO.pm
 lib/Net/STOMP/Client/Peer.pm
-lib/Net/STOMP/Client/Protocol.pm
+lib/Net/STOMP/Client/Receipt.pm
 lib/Net/STOMP/Client/Tutorial.pod
-t/1check.t
+lib/Net/STOMP/Client/Version.pm
+t/1decode.t
 t/1frame.t
 t/1parse.t
 t/2broker.t
