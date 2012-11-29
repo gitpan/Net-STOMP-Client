@@ -13,8 +13,8 @@
 package Net::STOMP::Client::Connection;
 use strict;
 use warnings;
-our $VERSION  = "1.9_1";
-our $REVISION = sprintf("%d.%02d", q$Revision: 2.2 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.9_2";
+our $REVISION = sprintf("%d.%02d", q$Revision: 2.3 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -179,7 +179,7 @@ sub _attempt ($%) {
             unless binmode($socket);
     }
     # so far so good...
-    @{ $peer }[Net::STOMP::Client::Peer::I_ADDR] = $socket->peerhost();
+    @{ $peer }[3] = $socket->peerhost();
     return($socket);
 }
 

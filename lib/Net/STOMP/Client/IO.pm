@@ -14,7 +14,7 @@ package Net::STOMP::Client::IO;
 use 5.005; # need the four-argument form of substr()
 use strict;
 use warnings;
-our $VERSION  = "1.9_1";
+our $VERSION  = "1.9_2";
 our $REVISION = sprintf("%d.%02d", q$Revision: 2.1 $ =~ /(\d+)\.(\d+)/);
 
 #

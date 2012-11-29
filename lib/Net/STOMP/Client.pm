@@ -13,15 +13,15 @@
 package Net::STOMP::Client;
 use strict;
 use warnings;
-our $VERSION  = "1.9_1";
-our $REVISION = sprintf("%d.%02d", q$Revision: 2.0 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.9_2";
+our $REVISION = sprintf("%d.%02d", q$Revision: 2.1 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
 #
 
 use Net::STOMP::Client::Connection qw();
-use Net::STOMP::Client::Frame qw();
+use Net::STOMP::Client::Frame qw(demessagify);
 use Net::STOMP::Client::HeartBeat qw(*);
 use Net::STOMP::Client::IO qw();
 use Net::STOMP::Client::Peer qw();
@@ -503,7 +503,7 @@ sub send_frame : method {
 }
 
 #
-# try to receive one frame (the frame is always checked, this is currently a feature)
+# try to receive one frame
 #
 
 sub receive_frame : method {
@@ -586,6 +586,22 @@ sub wait_for_frames : method {
     }
     # not reached...
     die("ooops!");
+}
+
+#
+# convenient shortcuts
+#
+
+sub queue_message : method {
+    my($self, $message, %option) = @_;
+
+    return($self->queue_frame(demessagify($message), %option));
+}
+
+sub send_message : method {
+    my($self, $message, %option) = @_;
+
+    return($self->send_frame(demessagify($message), %option));
 }
 
 #+++############################################################################
@@ -1341,10 +1357,18 @@ supported options: C<debug>
 try to send the given frame object;
 supported options: C<timeout> and C<debug>
 
+=item $stomp->send_message(MESSAGE, [OPTIONS])
+
+identical to send_frame() but taking a L<Messaging::Message> object
+
 =item $stomp->queue_frame(FRAME, [OPTIONS])
 
 add the given frame to the outgoing buffer queue;
 supported options: C<debug>
+
+=item $stomp->queue_message(MESSAGE, [OPTIONS])
+
+identical to queue_frame() but taking a L<Messaging::Message> object
 
 =item $stomp->send_data([OPTIONS])
 
@@ -1385,6 +1409,7 @@ versions.
 
 =head1 SEE ALSO
 
+L<Messaging::Message>,
 L<Net::STOMP::Client::Connection>,
 L<Net::STOMP::Client::Frame>,
 L<Net::STOMP::Client::HeartBeat>,

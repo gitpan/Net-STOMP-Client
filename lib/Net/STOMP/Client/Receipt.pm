@@ -13,7 +13,7 @@
 package Net::STOMP::Client::Receipt;
 use strict;
 use warnings;
-our $VERSION  = "1.9_1";
+our $VERSION  = "1.9_2";
 our $REVISION = sprintf("%d.%02d", q$Revision: 2.0 $ =~ /(\d+)\.(\d+)/);
 
 #

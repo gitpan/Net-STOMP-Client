@@ -14,8 +14,8 @@ package Net::STOMP::Client::Frame;
 use 5.005; # need the four-argument form of substr()
 use strict;
 use warnings;
-our $VERSION  = "1.9_1";
-our $REVISION = sprintf("%d.%02d", q$Revision: 2.2 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.9_2";
+our $REVISION = sprintf("%d.%02d", q$Revision: 2.3 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -23,6 +23,7 @@ our $REVISION = sprintf("%d.%02d", q$Revision: 2.2 $ =~ /(\d+)\.(\d+)/);
 
 use Encode qw();
 use No::Worries::Die qw(dief);
+use No::Worries::Export qw(export_control);
 use No::Worries::Log qw(log_debug);
 use Params::Validate qw(validate validate_pos :types);
 
@@ -794,6 +795,18 @@ sub demessagify ($) {
         $frame->header("content-type", "text/unknown") if $message->text();
     }
     return($frame);
+}
+
+#
+# export control
+#
+
+sub import : method {
+    my($pkg, %exported);
+
+    $pkg = shift(@_);
+    grep($exported{$_}++, qw(demessagify));
+    export_control(scalar(caller()), $pkg, \%exported, @_);
 }
 
 1;
