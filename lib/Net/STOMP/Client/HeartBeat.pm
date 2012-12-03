@@ -13,8 +13,8 @@
 package Net::STOMP::Client::HeartBeat;
 use strict;
 use warnings;
-our $VERSION  = "1.9_2";
-our $REVISION = sprintf("%d.%02d", q$Revision: 2.1 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.9_3";
+our $REVISION = sprintf("%d.%02d", q$Revision: 2.3 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -102,6 +102,20 @@ sub beat : method {
 }
 
 #
+# setup
+#
+
+sub _setup ($) {
+    my($self) = @_;
+
+    # additional options for new()
+    return(
+        "client_heart_beat" => { optional => 1, type => SCALAR },
+        "server_heart_beat" => { optional => 1, type => SCALAR },
+    ) unless $self;
+}
+
+#
 # hook for the CONNECT frame
 #
 
@@ -117,7 +131,7 @@ sub _connect_hook ($$) {
     $chb = int(($self->client_heart_beat() || 0) * 1000.0 + 0.5);
     $shb = int(($self->server_heart_beat() || 0) * 1000.0 + 0.5);
     $frame->header("heart-beat", "$chb,$shb") if $chb or $shb;
-};
+}
 
 #
 # negotiation helper
@@ -153,14 +167,18 @@ sub _connected_hook ($$) {
         $self->client_heart_beat(0);
         $self->server_heart_beat(0);
     }
-};
+}
 
 #
-# register the hooks
+# register the setup and hooks
 #
 
-$Net::STOMP::Client::Hook{"CONNECT"}{"heart-beat"} = \&_connect_hook;
-$Net::STOMP::Client::Hook{"CONNECTED"}{"heart-beat"} = \&_connected_hook;
+{
+    no warnings qw(once);
+    $Net::STOMP::Client::Setup{"heart-beat"} = \&_setup;
+    $Net::STOMP::Client::Hook{"CONNECT"}{"heart-beat"} = \&_connect_hook;
+    $Net::STOMP::Client::Hook{"CONNECTED"}{"heart-beat"} = \&_connected_hook;
+}
 
 #
 # export control

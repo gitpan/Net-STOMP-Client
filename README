@@ -23,6 +23,7 @@ To test this module with a STOMP broker, see t/2broker.t.
 In addition to the mandatory modules listed in Makefile.PL, the
 following optional modules do bring extra functionality:
 
+    Authen::Credential - allows easy authentication support
     IO::Socket::SSL - allows using STOMP over SSL
     Messaging::Message - allows frame <-> message conversions
 
@@ -32,6 +33,7 @@ After installing, you can find documentation for this module with the
 perldoc command.
 
     perldoc Net::STOMP::Client
+    perldoc Net::STOMP::Client::Auth
     perldoc Net::STOMP::Client::Connection
     perldoc Net::STOMP::Client::Frame
     perldoc Net::STOMP::Client::HeartBeat

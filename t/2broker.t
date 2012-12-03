@@ -9,6 +9,7 @@ use Net::STOMP::Client;
 #
 # we try to connect to a real broker over STOMP so we need some information:
 #  - PNSCT_URI: STOMP server URI (mandatory)
+#  - PNSCT_AUTH: authentication to use (optional)
 #  - PNSCT_LOGIN: user name to use (optional)
 #  - PNSCT_PASSCODE: password to use (optional)
 #  - PNSCT_DESTINATION: destination to send/receive messages (optional)
@@ -36,6 +37,7 @@ sub test_connect () {
 
     %option = ();
     $option{uri} = $ENV{PNSCT_URI};
+    $option{auth} = $ENV{PNSCT_AUTH} if $ENV{PNSCT_AUTH};
     $stomp = Net::STOMP::Client->new(%option);
     ok($stomp, "new");
     ok(!$stomp->session(), "new -> no session");

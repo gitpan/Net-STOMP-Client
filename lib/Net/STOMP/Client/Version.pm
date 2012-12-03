@@ -13,8 +13,8 @@
 package Net::STOMP::Client::Version;
 use strict;
 use warnings;
-our $VERSION  = "1.9_2";
-our $REVISION = sprintf("%d.%02d", q$Revision: 2.0 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.9_3";
+our $REVISION = sprintf("%d.%02d", q$Revision: 2.2 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -99,6 +99,28 @@ sub version : method {
 }
 
 #
+# setup
+#
+
+sub _setup ($) {
+    my($self) = @_;
+
+    # additional options for new()
+    return(
+        "accept_version" => { optional => 1, type => UNDEF|SCALAR|ARRAYREF },
+        "version"        => { optional => 1, type => UNDEF|SCALAR|ARRAYREF },
+    ) unless $self;
+    # FIXME: compatibility hack for Net::STOMP::Client 1.x (to be removed)
+    if (exists($self->{"version"})) {
+        dief("options version and accept_version are mutually exclusive")
+            if exists($self->{"accept_version"});
+        $self->{"accept_version"} = delete($self->{"version"});
+    }
+    # check the accept_version option (and set defaults)
+    $self->accept_version($self->{"accept_version"});
+}
+
+#
 # hook for the CONNECT frame
 #
 
@@ -113,7 +135,7 @@ sub _connect_hook ($$) {
     return unless grep($_ ne "1.0", @list);
     # add the appropriate header
     $frame->header("accept-version", join(",", @list));
-};
+}
 
 #
 # hook for the CONNECTED frame
@@ -137,14 +159,18 @@ sub _connected_hook ($$) {
     }
     # so far so good
     $self->{"version"} = $version;
-};
+}
 
 #
-# register the hooks
+# register the setup and hooks
 #
 
-$Net::STOMP::Client::Hook{"CONNECT"}{"version"} = \&_connect_hook;
-$Net::STOMP::Client::Hook{"CONNECTED"}{"version"} = \&_connected_hook;
+{
+    no warnings qw(once);
+    $Net::STOMP::Client::Setup{"version"} = \&_setup;
+    $Net::STOMP::Client::Hook{"CONNECT"}{"version"} = \&_connect_hook;
+    $Net::STOMP::Client::Hook{"CONNECTED"}{"version"} = \&_connected_hook;
+}
 
 #
 # export control

@@ -1,12 +1,13 @@
 Revision history for Net-STOMP-Client:
 
-1.9_2	Thu Nov 29 2012 (aka 2.0 RC 2)
+1.9_3	Mon Dec  3 2012 (aka 2.0 RC 3)
 	* Major code refactoring, see README.2.x for more information.
 	* Cleanup code to please Perl::Critic.
 	* Removed support for blocking I/O, only non-blocking I/O is supported.
 	* Now using the No::Worries and Params::Validate modules from CPAN.
 	* Added STOMP 1.2 support.
 	* Added the queue_message() and send_message() methods for convenience.
+	* Added optional authentication support via Authen::Credential.
 
 1.8	Thu Sep 27 2012
 	* Ignore I/O errors after we have successfully sent the DISCONNECT frame.

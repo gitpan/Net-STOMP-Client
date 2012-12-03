@@ -9,6 +9,7 @@ eg/README
 eg/listener
 eg/publisher
 lib/Net/STOMP/Client.pm
+lib/Net/STOMP/Client/Auth.pm
 lib/Net/STOMP/Client/Connection.pm
 lib/Net/STOMP/Client/Frame.pm
 lib/Net/STOMP/Client/HeartBeat.pm

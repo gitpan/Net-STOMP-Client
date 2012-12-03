@@ -13,13 +13,14 @@
 package Net::STOMP::Client;
 use strict;
 use warnings;
-our $VERSION  = "1.9_2";
-our $REVISION = sprintf("%d.%02d", q$Revision: 2.1 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.9_3";
+our $REVISION = sprintf("%d.%02d", q$Revision: 2.3 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
 #
 
+use Net::STOMP::Client::Auth qw(*);
 use Net::STOMP::Client::Connection qw();
 use Net::STOMP::Client::Frame qw(demessagify);
 use Net::STOMP::Client::HeartBeat qw(*);
@@ -38,7 +39,8 @@ use Time::HiRes qw();
 
 our(
     $Debug,  # default debug string
-    %Hook,   # registered hooks
+    %Hook,   # registered frame hooks
+    %Setup,  # registered setup helpers
 );
 
 #+++############################################################################
@@ -214,9 +216,6 @@ $Hook{"CONNECTED"}{"default"} = sub {
 sub _hacknew ($) {
     my($option) = @_;
 
-    # version option to be replaced by accept_version
-    $option->{"accept_version"} = delete($option->{"version"})
-        if exists($option->{"version"});
     # Net::STOMP::Client::Debug::Flags to be replaced by ???
     if ($Net::STOMP::Client::Debug::Flags and not exists($option->{"debug"})) {
         No::Worries::Log::log_filter("debug caller=~^Net::STOMP::Client")
@@ -246,12 +245,8 @@ my %new_options = (
     "sockopts"          => { optional => 1, type => HASHREF },
     "debug"             => { optional => 1, type => SCALAR },
     "timeout"           => { optional => 1, type => UNDEF|SCALAR|HASHREF },
-    # from Net::STOMP::Client::HeartBeat
-    "client_heart_beat" => { optional => 1, type => SCALAR },
-    "server_heart_beat" => { optional => 1, type => SCALAR },
-    # from STOMP::Client::Version
-    "accept_version"    => { optional => 1, type => UNDEF|SCALAR|ARRAYREF },
-    "version"           => { optional => 1, type => UNDEF|SCALAR|ARRAYREF },
+    # additional options from the sub-modules
+    map($_->(), values(%Setup)),
 );
 
 sub new : method {
@@ -261,14 +256,15 @@ sub new : method {
     %option = validate(@_, \%new_options);
     _hacknew(\%option);
     $self = bless(\%option, $class);
+    foreach my $name (sort(keys(%Setup))) {
+        $Setup{$name}->($self);
+    }
     if ($self =~ /\(0x(\w+)\)/) {
         $self->{"id"} =
             sprintf("%s-%x-%x-%x", $1, time(), $$, int(rand(65536)));
     } else {
         dief("unexpected Perl object: %s", $self);
     }
-    # check the accept_version option (and set defaults)
-    $self->accept_version($option{"accept_version"});
     # check the debug option (and set defaults)
     $self->{"debug"} = $Debug unless exists($self->{"debug"});
     # check the timeout option (and set defaults)
@@ -950,8 +946,9 @@ supported:
 
 =item C<accept_version>
 
-the STOMP version to use (string) or versions to use (reference to a list of
-strings); this defaults to the list of all supported versions
+the STOMP version to use (string) or versions to use (reference to a
+list of strings); this defaults to the list of all supported versions;
+see L<Net::STOMP::Client::Version> for more information
 
 =item C<version>
 
@@ -973,6 +970,11 @@ the server name or IP address
 =item C<port>
 
 the port number of the STOMP service
+
+=item C<auth>
+
+the authentication credential(s) to use, see L<Net::STOMP::Client::Auth> for
+more information
 
 =item C<sockopts>
 
@@ -1410,6 +1412,7 @@ versions.
 =head1 SEE ALSO
 
 L<Messaging::Message>,
+L<Net::STOMP::Client::Auth>,
 L<Net::STOMP::Client::Connection>,
 L<Net::STOMP::Client::Frame>,
 L<Net::STOMP::Client::HeartBeat>,

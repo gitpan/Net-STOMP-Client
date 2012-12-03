@@ -13,8 +13,8 @@
 package Net::STOMP::Client::Receipt;
 use strict;
 use warnings;
-our $VERSION  = "1.9_2";
-our $REVISION = sprintf("%d.%02d", q$Revision: 2.0 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "1.9_3";
+our $REVISION = sprintf("%d.%02d", q$Revision: 2.1 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -58,7 +58,7 @@ sub _client_hook ($$) {
     $value = $frame->header("receipt");
     return unless defined($value);
     dief("duplicate receipt: %s", $value) if $self->{"receipts"}{$value}++;
-};
+}
 
 #
 # hook for the RECEIPT frame
@@ -73,7 +73,7 @@ sub _receipt_hook ($$) {
     dief("unexpected receipt: %s", $value)
         unless $self->{"receipts"} and $self->{"receipts"}{$value};
     delete($self->{"receipts"}{$value});
-};
+}
 
 #
 # register the hooks
