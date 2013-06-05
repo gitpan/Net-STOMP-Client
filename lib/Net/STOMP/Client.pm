@@ -13,14 +13,14 @@
 package Net::STOMP::Client;
 use strict;
 use warnings;
-our $VERSION  = "2.0";
-our $REVISION = sprintf("%d.%02d", q$Revision: 2.3 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "2.1";
+our $REVISION = sprintf("%d.%02d", q$Revision: 2.6 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
 #
 
-use Net::STOMP::Client::Auth qw(*);
+use Net::STOMP::Client::Auth qw();
 use Net::STOMP::Client::Connection qw();
 use Net::STOMP::Client::Frame qw(demessagify);
 use Net::STOMP::Client::HeartBeat qw(*);
@@ -335,6 +335,7 @@ sub _close ($) {
 sub DESTROY {
     my($self) = @_;
 
+    local $@ = ""; # preserve $@!
     _close($self);
 }
 
@@ -1426,4 +1427,4 @@ L<No::Worries::Log>.
 
 Lionel Cons L<http://cern.ch/lionel.cons>
 
-Copyright CERN 2010-2012
+Copyright (C) CERN 2010-2013

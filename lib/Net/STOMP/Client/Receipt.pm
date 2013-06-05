@@ -13,8 +13,8 @@
 package Net::STOMP::Client::Receipt;
 use strict;
 use warnings;
-our $VERSION  = "2.0";
-our $REVISION = sprintf("%d.%02d", q$Revision: 2.1 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "2.1";
+our $REVISION = sprintf("%d.%02d", q$Revision: 2.2 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -166,4 +166,4 @@ L<Net::STOMP::Client>.
 
 Lionel Cons L<http://cern.ch/lionel.cons>
 
-Copyright CERN 2012
+Copyright (C) CERN 2010-2013

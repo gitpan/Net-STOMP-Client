@@ -1,5 +1,9 @@
 Revision history for Net-STOMP-Client:
 
+2.1	Wed Jun  5 2013
+	* Now preserving $@ in object destructor.
+	* Fixed Net::STOMP::Client::Auth import bug.
+
 2.0	Fri Dec 14 2012
 	* Major code refactoring, see README.2.x for more information.
 	* Cleanup code to please Perl::Critic.

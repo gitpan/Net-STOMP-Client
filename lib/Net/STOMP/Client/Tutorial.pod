@@ -472,7 +472,7 @@ efficiently.
 
 Here is how to queue ten messages and send them in one go.
 
-  foreach $n (1 .. 10) {
+  foreach my $n (1 .. 10) {
       $frame = Net::STOMP::Client::Frame->new(
           command => "SEND",
           headers => { destination => "/topic/test" },
@@ -499,4 +499,4 @@ L<Net::STOMP::Client::Version>.
 
 Lionel Cons L<http://cern.ch/lionel.cons>
 
-Copyright CERN 2010-2012
+Copyright (C) CERN 2010-2013

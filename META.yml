@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Net-STOMP-Client
-version:            2.0
+version:            2.1
 abstract:           STOMP object oriented client module
 author:
     - Lionel Cons <lionel.cons@cern.ch>
