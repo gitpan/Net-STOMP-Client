@@ -13,8 +13,8 @@
 package Net::STOMP::Client::Connection;
 use strict;
 use warnings;
-our $VERSION  = "2.1";
-our $REVISION = sprintf("%d.%02d", q$Revision: 2.4 $ =~ /(\d+)\.(\d+)/);
+our $VERSION  = "2.1_1";
+our $REVISION = sprintf("%d.%02d", q$Revision: 2.5 $ =~ /(\d+)\.(\d+)/);
 
 #
 # used modules
@@ -43,7 +43,7 @@ sub _uri2peer ($) {
     my($uri) = @_;
 
     if ($uri =~ m{ ^ (tcp|ssl|stomp|stomp\+ssl)
-                     \:\/\/ ([a-z0-9\.\-]+) \: (\d+) \/? $ }x) {
+                     \:\/\/ ([a-z0-9\.\-]+) \: (\d+) \/? $ }ix) {
         return(Net::STOMP::Client::Peer->new(
             proto => $1,
             host  => $2,
@@ -125,13 +125,13 @@ sub _parse_uri ($) {
                 last;
             }
         } elsif ($uri =~ m{ ^ failover \: (?:\/\/)? \( ([a-z0-9\.\-\:\/\,]+) \)
-                            ( \? [a-z0-9\.\=\-\&]+ ) ? $ }x) {
+                            ( \? [a-z0-9\.\=\-\&]+ ) ? $ }ix) {
             # failover with options
             _default_options(\%option);
             _parse_options(\%option, $2) if $2;
             @peers = map(_uri2peer($_), split(/,/, $1));
             last;
-        } elsif ($uri =~ m{ ^ failover \: ([a-z0-9\.\-\:\/\,]+) $ }x) {
+        } elsif ($uri =~ m{ ^ failover \: ([a-z0-9\.\-\:\/\,]+) $ }ix) {
             # failover without options
             _default_options(\%option);
             @peers = map(_uri2peer($_), split(/,/, $1));

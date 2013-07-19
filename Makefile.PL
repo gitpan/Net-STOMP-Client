@@ -7,7 +7,7 @@ my(%param, $emv, $name);
 %param = (
     NAME                   => 'Net::STOMP::Client',
     AUTHOR                 => 'Lionel Cons <lionel.cons@cern.ch>',
-    VERSION                => '2.1',
+    VERSION                => '2.1_1',
     ABSTRACT_FROM          => 'lib/Net/STOMP/Client.pm',
     LICENSE                => 'perl',
     PL_FILES               => {},

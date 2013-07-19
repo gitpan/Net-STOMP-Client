@@ -1,5 +1,8 @@
 Revision history for Net-STOMP-Client:
 
+???	???
+	* Fixed failover parsing (RT#87025).
+
 2.1	Wed Jun  5 2013
 	* Now preserving $@ in object destructor.
 	* Fixed Net::STOMP::Client::Auth import bug.
