@@ -48,7 +48,8 @@ or with the pair of C<host> and C<port> parameters:
 
 Using SSL is more complex since more parameters have to be given. Note:
 L<IO::Socket::SSL> is used behind the scene so you can refer to its
-documentation for more information. Here is how this could be done:
+documentation for more information. Here is a complete example with
+certificate based authentication:
 
   $stomp = Net::STOMP::Client->new(
       uri => "stomp+ssl://mybroker:6162",
@@ -87,6 +88,18 @@ stage. For instance with:
       login    => "guest",
       passcode => "welcome",
   );
+
+In case the broker uses virtual hosts, you can add a C<host> parameter to the
+C<connect> method:
+
+  $stomp->connect(
+      login    => "guest",
+      passcode => "welcome",
+      host     => "/",
+  );
+
+If it is not given explicitly, the C<host> parameter defaults to whatever has
+been given in the C<new> method, via the C<host> or C<uri> parameter.
 
 At this point, the session has been established and you can now send and/or
 receive messages.

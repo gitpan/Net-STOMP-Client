@@ -21,6 +21,7 @@ lib/Net/STOMP/Client/Version.pm
 t/1decode.t
 t/1frame.t
 t/1parse.t
+t/1uri.t
 t/2broker.t
 t/2message.t
 t/3pod.t
