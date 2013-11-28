@@ -1,7 +1,8 @@
 Revision history for Net-STOMP-Client:
 
-???	???
+2.2	Thu Nov 28 2013
 	* Fixed failover parsing (RT#87025).
+	* Improved virtual host documentation in the tutorial (RT#90069).
 
 2.1	Wed Jun  5 2013
 	* Now preserving $@ in object destructor.
